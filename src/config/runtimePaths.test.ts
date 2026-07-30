@@ -9,6 +9,11 @@ import { ensureRuntimeLayout, getRuntimePathsForTesting, useLauncherVerifiedRunt
 
 const execFileAsync = promisify(execFile);
 
+async function makeCanonicalTemporaryDirectory(prefix: string): Promise<string> {
+  const canonicalTemporaryRoot = await fs.realpath(os.tmpdir());
+  return await fs.mkdtemp(path.join(canonicalTemporaryRoot, prefix));
+}
+
 function windowsPowerShellEnvironment(): NodeJS.ProcessEnv {
   const systemRoot = process.env.SystemRoot || "C:\\Windows";
   const programFiles = process.env.ProgramFiles || "C:\\Program Files";
@@ -68,14 +73,14 @@ async function aclSddl(target: string): Promise<string> {
 }
 
 test("runtime privado crea todas las carpetas fuera del repositorio", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "arca-runtime-"));
+  const root = await makeCanonicalTemporaryDirectory("arca-runtime-");
   const runtime = await ensureRuntimeLayout(getRuntimePathsForTesting(root));
   assert.equal(runtime.root, root);
   for (const directory of Object.values(runtime)) assert.equal((await fs.stat(directory)).isDirectory(), true);
 });
 
 test("runtime atestiguado exige la misma raíz y toda la estructura existente", async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "arca-runtime-attested-"));
+  const root = await makeCanonicalTemporaryDirectory("arca-runtime-attested-");
   context.after(async () => { await fs.rm(root, { recursive: true, force: true }); });
   const paths = getRuntimePathsForTesting(root);
   const created = await ensureRuntimeLayout(paths);
@@ -93,8 +98,8 @@ test("runtime atestiguado exige la misma raíz y toda la estructura existente", 
 });
 
 test("runtime atestiguado rechaza un directorio fijo redirigido fuera de la raíz", { skip: process.platform !== "win32" }, async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "arca-runtime-junction-"));
-  const external = await fs.mkdtemp(path.join(os.tmpdir(), "arca-runtime-external-"));
+  const root = await makeCanonicalTemporaryDirectory("arca-runtime-junction-");
+  const external = await makeCanonicalTemporaryDirectory("arca-runtime-external-");
   context.after(async () => {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(external, { recursive: true, force: true });
@@ -110,7 +115,7 @@ test("runtime atestiguado rechaza un directorio fijo redirigido fuera de la raí
 });
 
 test("runtime elimina ACE explícitas no autorizadas de directorios y archivos existentes", { skip: process.platform !== "win32" }, async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "arca-runtime-acl-"));
+  const root = await makeCanonicalTemporaryDirectory("arca-runtime-acl-");
   context.after(async () => { await fs.rm(root, { recursive: true, force: true }); });
   const paths = await ensureRuntimeLayout(getRuntimePathsForTesting(root));
   const existingFile = path.join(paths.logs, "existing.jsonl");
@@ -126,8 +131,8 @@ test("runtime elimina ACE explícitas no autorizadas de directorios y archivos e
 });
 
 test("runtime rechaza un junction anidado sin alterar la ACL del destino externo", { skip: process.platform !== "win32" }, async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "arca-runtime-nested-junction-"));
-  const external = await fs.mkdtemp(path.join(os.tmpdir(), "arca-runtime-untouched-"));
+  const root = await makeCanonicalTemporaryDirectory("arca-runtime-nested-junction-");
+  const external = await makeCanonicalTemporaryDirectory("arca-runtime-untouched-");
   const paths = await ensureRuntimeLayout(getRuntimePathsForTesting(root));
   const junction = path.join(paths.logs, "escape");
   await fs.symlink(external, junction, "junction");
@@ -142,8 +147,8 @@ test("runtime rechaza un junction anidado sin alterar la ACL del destino externo
 });
 
 test("runtime no crea carpetas externas a través de un junction preexistente", { skip: process.platform !== "win32" }, async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "arca-runtime-parent-junction-"));
-  const external = await fs.mkdtemp(path.join(os.tmpdir(), "arca-runtime-parent-external-"));
+  const root = await makeCanonicalTemporaryDirectory("arca-runtime-parent-junction-");
+  const external = await makeCanonicalTemporaryDirectory("arca-runtime-parent-external-");
   const junction = path.join(root, "jobs");
   await fs.symlink(external, junction, "junction");
   context.after(async () => {

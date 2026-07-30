@@ -76,6 +76,19 @@ test("la ruta rápida espera cada pantalla y el total calculado sin networkidle 
     await page.route("https://fe.afip.gob.ar/rcel/jsp/menu_ppal.jsp", (route) => route.fulfill({ contentType: "text/html", body: fixture }));
     await page.goto("https://fe.afip.gob.ar/rcel/jsp/menu_ppal.jsp");
 
+    const observedLoadStates: string[] = [];
+    const observedWaitDurations: number[] = [];
+    const originalWaitForLoadState = page.waitForLoadState.bind(page);
+    const originalWaitForTimeout = page.waitForTimeout.bind(page);
+    page.waitForLoadState = async (state = "load", options) => {
+      observedLoadStates.push(state);
+      await originalWaitForLoadState(state, options);
+    };
+    page.waitForTimeout = async (timeout) => {
+      observedWaitDurations.push(timeout);
+      await originalWaitForTimeout(timeout);
+    };
+
     const job = {
       schemaVersion: 2,
       operationId: "integration-fast-path-001",
@@ -100,7 +113,6 @@ test("la ruta rápida espera cada pantalla y el total calculado sin networkidle 
       outputDir: "C:\\runtime\\downloads",
     } satisfies ResolvedInvoiceJob;
 
-    const startedAt = Date.now();
     const evidence = await fillInvoice(page, job, { strictSelectors: true, interactive: false, manualIntervention: false });
     assert.equal(await page.locator("#resumen").isVisible(), true);
     assert.equal(evidence.amount, "123456.78");
@@ -108,7 +120,8 @@ test("la ruta rápida espera cada pantalla y el total calculado sin networkidle 
     assert.equal(evidence.issuerCuit, "20000000001");
     assert.equal(evidence.issuer, "EMISOR TOTALMENTE FICTICIO");
     assert.equal(evidence.recipientName, "ENTIDAD FICTICIA DE PRUEBA");
-    assert.ok(Date.now() - startedAt < 3000);
+    assert.equal(observedLoadStates.includes("networkidle"), false);
+    assert.equal(observedWaitDurations.every((duration) => duration <= 100), true);
   } finally {
     await browser.close();
   }

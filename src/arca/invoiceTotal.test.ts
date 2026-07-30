@@ -22,9 +22,13 @@ test("el cálculo del total espera el valor derivado en vez de dormir un tiempo 
     const url = "https://fe.afip.gob.ar/rcel/jsp/genComDatosOperacion.do";
     await page.route(url, (route) => route.fulfill({ contentType: "text/html", body: fixture }));
     await page.goto(url);
-    const startedAt = Date.now();
+    const observedWaitDurations: number[] = [];
+    const originalWaitForTimeout = page.waitForTimeout.bind(page);
+    page.waitForTimeout = async (timeout) => {
+      observedWaitDurations.push(timeout);
+      await originalWaitForTimeout(timeout);
+    };
     await waitForCalculatedInvoiceTotal(page, 12_345_678, 1000);
-    assert.ok(Date.now() - startedAt < 500);
 
     await page.locator("#subtotal, #importe_total").evaluateAll((inputs) => {
       for (const input of inputs) (input as HTMLInputElement).value = "1.00";
@@ -33,6 +37,7 @@ test("el cálculo del total espera el valor derivado en vez de dormir un tiempo 
       () => waitForCalculatedInvoiceTotal(page, 12_345_678, 100),
       /no mostró el subtotal y el importe total calculados/i,
     );
+    assert.equal(observedWaitDurations.every((duration) => duration <= 50), true);
   } finally {
     await browser.close();
   }
