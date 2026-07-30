@@ -1,0 +1,98 @@
+# Estado y roadmap del proyecto
+
+Última actualización: 2026-07-29.
+
+## Estado actual
+
+ARCA Web Control es un proyecto experimental y en desarrollo. Combina un núcleo Playwright local, una sesión conversacional, un modo de aprendizaje visible, manifiestos de capacidades, una skill para agentes y un MCP `stdio`.
+
+La única capacidad fiscal habilitada es `invoice-services-single-item`: Factura C de Servicios, moneda local `ARS` y un ítem, automatizada hasta el resumen. Su madurez vigente es `automated_to_summary`, con `hiddenAllowed: false`. La preparación exige verificar un único control visible `Moneda Extranjera` desmarcado. La implementación irreversible permanece en el código para revalidación, pero el manifiesto actual no permite ejecutarla.
+
+La plataforma soportada es Windows 10/11. Las credenciales canónicas viven en el Administrador de credenciales de Windows y todos los datos operativos privados viven fuera de Git, bajo `%LOCALAPPDATA%\ManejoARCA`.
+
+## Base implementada
+
+- Jobs `schemaVersion: 2`, moneda y condición frente al IVA explícitas, importes decimales exactos, CUIT canónico estricto y `operationId` idempotente.
+- Estado preparado inmutable con hash, huella de página y vencimiento de 60 minutos.
+- Ledger con estados `prepared`, `emitting`, `emitted`, `failed_before_emit` y `unknown`.
+- Selectores exactos, rechazo de ambigüedades y validación semántica de filas y secciones del resumen contra controles reales.
+- Captura y validación del PDF, extracción local de número/CAE y reconciliación explícita de estados inciertos.
+- Sesiones con lock, estado atómico, cierre controlado y detección de credenciales inválidas, captcha y expiración.
+- Aprendizaje visible que omite secretos y valores de formularios y se detiene antes de acciones irreversibles.
+- Manifiestos versionados, sincronización de referencias, skill local y MCP sin herramientas genéricas de clic en producción.
+- ACL privadas para runtime, aprendizaje, jobs, logs, ledger, descargas y perfiles.
+
+## Validación visible del 2026-07-29 hasta el resumen
+
+Se recorrió la capacidad soportada en Chrome visible hasta `RESUMEN DE DATOS (PASO 4 DE 4)`, sin emitir. Se verificaron desde la interfaz fecha de emisión, período, vencimiento, receptor, condición frente al IVA, domicilio, condición de venta, descripción y total.
+
+El aprendizaje confirmó estas reglas generales:
+
+- vencimiento predeterminado de cinco días corridos para Servicios;
+- actividad asociada, referencia comercial y unidad de medida vacías por defecto;
+- recuperación de `403 Forbidden` o sesión expirada mediante autenticación nueva, nunca reenviando el formulario;
+- búsqueda del servicio sin depender de la sección `Más utilizados`;
+- detención ante resultados ambiguos o pantallas inesperadas.
+
+Toda evidencia cruda permanece fuera del repositorio.
+
+## Emisión real controlada del 2026-07-29 y descarga directa
+
+Una Factura C de Servicios fue emitida en Chrome visible después de mostrar el resumen y recibir la confirmación exacta `EMITIR`. ARCA mostró `Comprobante Generado` y no se repitió la acción irreversible.
+
+La interfaz inició una descarga directa al pulsar `Imprimir...`. La estrategia anterior no capturó ese evento y dejó correctamente el ledger en `unknown`. El PDF oficial se recuperó, validó y reconcilió localmente como `emitted`, sin volver a emitir. Los identificadores, el PDF, su hash y el ledger permanecen exclusivamente en el almacenamiento privado.
+
+El código vigente escucha la descarga antes del único clic, valida el PDF y extrae número/CAE. Ese tramo nuevo todavía requiere una próxima validación visible completa; por eso `lastValidatedVisible` continúa en `false`, la madurez regresó a `automated_to_summary` y tanto la emisión como el modo oculto permanecen deshabilitados por el manifiesto.
+
+## Evaluaciones aisladas de la skill
+
+Las evaluaciones se realizaron sin abrir ARCA, sin acceder al runtime privado y sin ejecutar acciones fiscales:
+
+- el escenario soportado clasificó correctamente Factura C, Servicios, ARS y un ítem, con preparación únicamente hasta el resumen;
+- una variante Factura A, Productos, moneda extranjera y dos ítems fue rechazada y derivada a aprendizaje visible privado;
+- una paráfrasis como «dale, confirmo» fue rechazada como autorización: una futura emisión solo podrá aceptar un nuevo mensaje humano exactamente igual a `EMITIR`;
+- la revisión de seguridad confirmó CUIT de once dígitos exactos, moneda explícita, aislamiento de pestañas, frame principal y URL estable en aprendizaje, y ausencia de inferencias fiscales en la migración.
+
+Estas evaluaciones comprueban interpretación y fail-closed; no sustituyen la próxima revalidación visible del tramo irreversible.
+
+## Controles locales de aceptación
+
+Antes de publicar o promover una capacidad deben aprobarse:
+
+- `npm run validate:public`;
+- `npm run validate:skill`;
+- `npm run typecheck`;
+- `npm test`;
+- `npm audit --audit-level=high`;
+- `npm run arca:capability:check`;
+- `npm run mcp:smoke`;
+- revisión de seguridad y `autoreview` sin hallazgos accionables pendientes.
+
+Las pruebas automatizadas usan fixtures ficticios o una web local simulada; no ejecutan acciones fiscales reales.
+
+## Validación del baseline saneado del 2026-07-29
+
+Antes de recrear la historia Git pública se obtuvieron estos resultados locales:
+
+- `npm test`: 206 pruebas aprobadas, sin fallos;
+- `npm run typecheck`, `npm run arca:capability:check`, `npm run validate:skill` y `npm run mcp:smoke`: aprobados;
+- `quick_validate.py` oficial de `skill-creator`: skill válida;
+- `npm audit --audit-level=high`: 0 vulnerabilidades;
+- `git diff --check`: aprobado;
+- `autoreview` con GPT-5.6 Sol y razonamiento alto: dos pasadas, 0 hallazgos accionables; revisión de secretos limpia.
+
+El validador público no encontró incidencias en el árbol saneado y bloqueó únicamente objetos de la historia Git local anterior. Esa historia se conserva en un respaldo privado y debe sustituirse por un baseline nuevo antes de cualquier publicación.
+
+## Próximos hitos
+
+1. Completar una nueva corrida visible de la captura automática del PDF y verificar ledger, número, CAE y hash.
+2. Evaluar `fast_path` solamente después de evidencia repetida y aprobación humana; `hiddenAllowed` no cambia de forma automática.
+3. Aprender y validar la consulta de comprobantes emitidos antes de exponer `arca_query_issued_invoices`.
+4. Incorporar otros tipos de comprobante, conceptos o múltiples ítems únicamente como capacidades separadas y supervisadas.
+5. Diseñar un proveedor de credenciales seguro para otras plataformas antes de afirmar compatibilidad con macOS o Linux.
+
+## Preparación para publicación pública
+
+El repositorio público debe nacer desde una historia Git limpia y sin datos privados. No se debe publicar la historia local anterior, aunque los archivos actuales estén saneados. El baseline público requiere documentación honesta, licencia Apache-2.0, plantillas de contribución, CI en Windows y validaciones automáticas de privacidad.
+
+La creación del remoto y el primer `push` requieren aprobación humana separada. Hasta entonces, toda preparación permanece local.

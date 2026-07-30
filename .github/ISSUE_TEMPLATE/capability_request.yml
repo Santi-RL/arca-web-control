@@ -1,0 +1,79 @@
+name: Nueva capacidad
+description: Proponer una operación general de ARCA para aprendizaje e implementación controlada.
+title: "[Capacidad]: "
+labels:
+  - capability
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describa la capacidad sin nombres, CUIT, domicilios, comprobantes, screenshots ni contenido copiado de una cuenta real. Una propuesta comienza como `observed` y no habilita producción.
+  - type: input
+    id: objective
+    attributes:
+      label: Objetivo
+      description: ¿Qué resultado general debe lograr la capacidad?
+      placeholder: "Preparar una operación hasta un resumen verificable"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Alcance y fuera de alcance
+      description: Defina variantes, tipo de comprobante o trámite y límites conocidos.
+    validations:
+      required: true
+  - type: dropdown
+    id: irreversible
+    attributes:
+      label: ¿Incluye una acción irreversible?
+      options:
+        - Sí
+        - No
+        - No está determinado
+    validations:
+      required: true
+  - type: textarea
+    id: screens
+    attributes:
+      label: Pantallas y controles observados
+      description: Use nombres genéricos de pantallas y etiquetas visibles; no pegue HTML ni datos de una sesión.
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Esquema de entrada propuesto
+      description: Enumere campos y reglas sin valores reales.
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: Desvíos y recuperación
+      description: Considere captcha, expiración, ambigüedad, campos faltantes y estado incierto.
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Estrategia de pruebas
+      description: Explique cómo crear fixtures ficticios y una integración local sin ejecutar acciones fiscales.
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: Referencias públicas
+      description: Enlace únicamente documentación pública oficial o material sin datos personales.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmaciones
+      options:
+        - label: La propuesta no contiene PII, credenciales ni artefactos de ARCA.
+          required: true
+        - label: Comprendo que la capacidad comienza como `observed` y requiere validación humana visible.
+          required: true
+        - label: Comprendo que una acción irreversible nunca se promociona automáticamente.
+          required: true

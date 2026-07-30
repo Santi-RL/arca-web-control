@@ -1,0 +1,23 @@
+{
+  "id": "invoice-services-single-item",
+  "version": 7,
+  "title": "Factura C de servicios de un ítem",
+  "maturity": "automated_to_summary",
+  "hiddenAllowed": false,
+  "commands": ["status", "snapshot", "screenshot", "prepare-invoice"],
+  "irreversibleAction": "Emitir el comprobante en ARCA",
+  "confirmation": "EMITIR",
+  "recovery": "Detenerse y capturar evidencia. Ante 403 o sesión expirada, no reenviar el formulario: autenticar nuevamente y reconstruir el borrador. Ante estado unknown, consultar ARCA antes de cualquier reintento.",
+  "inputSchema": "invoice-job-v2",
+  "runtimeScope": {
+    "kind": "invoice",
+    "voucherType": "Factura C",
+    "concept": "Servicios",
+    "currency": "ARS",
+    "itemCount": 1
+  },
+  "testEvidence": ["src/capabilities/registry.test.ts", "src/arca/preparedInvoice.test.ts", "src/arca/liveSession.test.ts", "src/arca/invoiceFlow.integration.test.ts", "src/arca/invoiceTotal.test.ts", "src/arca/invoicePdf.test.ts", "src/arca/navigation.test.ts", "src/arca/operationLedger.test.ts", "src/arca/sessionLauncher.test.ts", "src/config/env.test.ts", "src/jobs/schema.test.ts", "src/jobs/migrateScript.test.ts", "src/learning/recorder.integration.test.ts"],
+  "realEvidence": ["docs/estado-y-roadmap.md#validación-visible-del-2026-07-29-hasta-el-resumen"],
+  "lastValidatedAt": null,
+  "lastValidatedVisible": false
+}

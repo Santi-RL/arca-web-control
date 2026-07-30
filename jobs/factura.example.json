@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "operationId": "factura-ejemplo-2030-06-001",
+  "issuerKey": "20000000001",
+  "recipientCuit": "20000000001",
+  "recipientName": "RECEPTOR DE PRUEBA",
+  "recipientVatCondition": "Consumidor Final",
+  "voucherType": "Factura C",
+  "pointOfSale": "00001",
+  "date": "2030-06-15",
+  "concept": "Servicios",
+  "currency": "ARS",
+  "billingPeriodFrom": "2030-06-01",
+  "billingPeriodTo": "2030-06-30",
+  "saleCondition": "Transferencia Bancaria",
+  "description": "Servicio de prueba",
+  "amount": "123456.78",
+  "outputDir": "."
+}

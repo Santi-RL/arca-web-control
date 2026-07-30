@@ -1,0 +1,89 @@
+name: Reporte de error
+description: Informar un comportamiento reproducible con datos completamente ficticios.
+title: "[Error]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        No incluya nombres, CUIT, claves, domicilios, importes, comprobantes, capturas, PDFs, logs ni artefactos de una sesión real. Para vulnerabilidades, use el reporte privado indicado en SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Versión o commit
+      description: Indique la versión o el hash corto del commit probado.
+      placeholder: "abcdef12"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Versión de Windows
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Versión de Node.js
+      placeholder: "24.x"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área afectada
+      options:
+        - Credenciales locales
+        - Sesión y login
+        - Preparación de Factura C de servicios
+        - Emisión controlada
+        - Descarga o validación de PDF
+        - Aprendizaje visible
+        - Skill
+        - MCP
+        - Documentación
+        - Otra
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Comportamiento observado
+      description: Describa el error sin copiar contenido de ARCA ni datos reales.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamiento esperado
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproducción sanitizada
+      description: Use fixtures ficticios o una web local simulada. No adjunte evidencia cruda de ARCA.
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: Estado y recuperación
+      description: Indique si ocurrió antes de una acción irreversible y cómo se cerró la sesión. No revele identificadores.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmaciones
+      options:
+        - label: Verifiqué que el reporte no contiene PII, credenciales ni artefactos de una sesión real.
+          required: true
+        - label: El problema se reproduce con datos totalmente ficticios o una simulación local.
+          required: true
+        - label: No ejecuté ni repetí una acción fiscal para demostrar el error.
+          required: true
+        - label: Este reporte no describe una vulnerabilidad explotable.
+          required: true

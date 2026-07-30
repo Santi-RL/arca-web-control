@@ -1,0 +1,53 @@
+{
+  "name": "arca-web-control",
+  "version": "0.2.0",
+  "description": "Skill y motor local experimental para operar ARCA con Playwright y supervisión humana.",
+  "private": true,
+  "license": "Apache-2.0",
+  "packageManager": "npm@11.12.1",
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
+  },
+  "type": "module",
+  "scripts": {
+    "deps:install": "powershell -ExecutionPolicy Bypass -File scripts/install-deps.ps1",
+    "arca:invoice": "tsx src/cli.ts",
+    "arca:invoice:recover-pdf": "tsx scripts/arca-invoice-recover-pdf.mts",
+    "arca:session:start": "node --import tsx scripts/arca-session-start.mts",
+    "arca:session:cmd": "node --import tsx scripts/arca-session-cmd.mts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "arca:session:stop": "node --import tsx scripts/arca-session-stop.mts",
+    "arca:credentials:set": "tsx scripts/arca-credentials.mts set",
+    "arca:credentials:list": "tsx scripts/arca-credentials.mts list",
+    "arca:credentials:update": "tsx scripts/arca-credentials.mts update",
+    "arca:credentials:delete": "tsx scripts/arca-credentials.mts delete",
+    "arca:credentials:migrate-env": "tsx scripts/arca-credentials.mts migrate-env",
+    "arca:credentials:migrate-vault": "tsx scripts/arca-credentials.mts migrate-vault",
+    "arca:credentials:import-csv": "tsx scripts/arca-credentials-import.mts",
+    "arca:job:migrate": "tsx scripts/arca-job-migrate.mts",
+    "arca:learn:start": "tsx scripts/arca-learn-start.mts",
+    "arca:learn:cmd": "tsx scripts/arca-learn-cmd.mts",
+    "arca:capability:sync": "tsx scripts/arca-capability.mts sync",
+    "arca:capability:check": "tsx scripts/arca-capability.mts check",
+    "arca:capability:promote": "tsx scripts/arca-capability.mts promote",
+    "arca:mcp": "tsx scripts/arca-mcp.mts",
+    "arca:issuer:profile": "tsx scripts/arca-issuer-profile.mts",
+    "mcp:smoke": "tsx scripts/mcp-smoke.mts",
+    "validate:skill": "tsx scripts/validate-skill.mts",
+    "validate:public": "tsx scripts/public-repo-check.mts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^17.4.2",
+    "pdfjs-dist": "6.2.108",
+    "playwright": "^1.61.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  }
+}
