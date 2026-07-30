@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { makeCanonicalTemporaryDirectory } from "../testing/temporaryDirectory.js";
 import { chromium } from "playwright";
 import { reservePrivatePdfDestination } from "../config/privateDownloads.js";
 import { downloadGeneratedInvoicePdf, inspectArcaInvoicePdf } from "./invoicePdf.js";
 
 test("captura la descarga directa iniciada por Imprimir y la publica sin depender de una URL HTML", async () => {
   const browser = await chromium.launch({ headless: true });
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "arca-direct-pdf-"));
+  const directory = await makeCanonicalTemporaryDirectory("arca-direct-pdf-");
   try {
     const page = await browser.newPage({ acceptDownloads: true });
     await loadGeneratedInvoiceFixture(page, `<a download="comprobante.pdf" href="data:application/pdf;base64,JVBERi0xLjQK">Imprimir...</a>`);
@@ -29,7 +29,7 @@ test("captura la descarga directa iniciada por Imprimir y la publica sin depende
 
 test("Imprimir se acciona una sola vez cuando el navegador no entrega la descarga", async () => {
   const browser = await chromium.launch({ headless: true });
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "arca-missing-pdf-"));
+  const directory = await makeCanonicalTemporaryDirectory("arca-missing-pdf-");
   try {
     const page = await browser.newPage({ acceptDownloads: true });
     await loadGeneratedInvoiceFixture(page, `<button onclick="window.clicks=(window.clicks||0)+1">Imprimir...</button>`);
@@ -54,7 +54,7 @@ async function loadGeneratedInvoiceFixture(page: import("playwright").Page, body
 
 test("valida el PDF fiscal y extrae número de comprobante y CAE", async () => {
   const browser = await chromium.launch({ headless: true });
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "arca-inspect-pdf-"));
+  const directory = await makeCanonicalTemporaryDirectory("arca-inspect-pdf-");
   const pdfPath = path.join(directory, "factura.pdf");
   try {
     const page = await browser.newPage();

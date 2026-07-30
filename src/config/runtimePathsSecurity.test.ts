@@ -3,12 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { makeCanonicalTemporaryDirectory } from "../testing/temporaryDirectory.js";
 import { assertOperationalRuntimeEnvironment, ensurePrivateDirectory, getRuntimePaths } from "./runtimePaths.js";
-
-async function makeCanonicalTemporaryDirectory(prefix: string): Promise<string> {
-  const canonicalTemporaryRoot = await fs.realpath(os.tmpdir());
-  return await fs.mkdtemp(path.join(canonicalTemporaryRoot, prefix));
-}
 
 test("el runtime operativo rechaza ARCA_RUNTIME_ROOT aunque apunte fuera del repositorio", () => {
   const previousRoot = process.env.ARCA_RUNTIME_ROOT;

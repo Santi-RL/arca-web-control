@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { makeCanonicalTemporaryDirectory } from "../testing/temporaryDirectory.js";
 import { ensureRuntimeLayout, getRuntimePathsForTesting, useLauncherVerifiedRuntimeLayout } from "./runtimePaths.js";
 
 const execFileAsync = promisify(execFile);
-
-async function makeCanonicalTemporaryDirectory(prefix: string): Promise<string> {
-  const canonicalTemporaryRoot = await fs.realpath(os.tmpdir());
-  return await fs.mkdtemp(path.join(canonicalTemporaryRoot, prefix));
-}
 
 function windowsPowerShellEnvironment(): NodeJS.ProcessEnv {
   const systemRoot = process.env.SystemRoot || "C:\\Windows";
@@ -72,8 +67,9 @@ async function aclSddl(target: string): Promise<string> {
   ].join("; "));
 }
 
-test("runtime privado crea todas las carpetas fuera del repositorio", async () => {
+test("runtime privado crea todas las carpetas fuera del repositorio", async (context) => {
   const root = await makeCanonicalTemporaryDirectory("arca-runtime-");
+  context.after(async () => { await fs.rm(root, { recursive: true, force: true }); });
   const runtime = await ensureRuntimeLayout(getRuntimePathsForTesting(root));
   assert.equal(runtime.root, root);
   for (const directory of Object.values(runtime)) assert.equal((await fs.stat(directory)).isDirectory(), true);

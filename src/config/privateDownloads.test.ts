@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { canonicalTemporaryRoot, makeCanonicalTemporaryDirectory } from "../testing/temporaryDirectory.js";
 import { publishReservedPdf, reservePrivatePdfDestination, resolveRuntimePdfPath } from "./privateDownloads.js";
 
 test("las descargas manuales quedan contenidas en downloads", () => {
@@ -15,7 +16,7 @@ test("las descargas manuales quedan contenidas en downloads", () => {
 });
 
 test("una reserva impide sobrescribir un PDF existente", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "arca-download-reserve-"));
+  const directory = await makeCanonicalTemporaryDirectory("arca-download-reserve-");
   try {
     const destination = path.join(directory, "factura.pdf");
     const reservation = await reservePrivatePdfDestination(destination, directory, directory);
@@ -30,7 +31,7 @@ test("una reserva impide sobrescribir un PDF existente", async () => {
 
 
 test("la publicación exclusiva no sobrescribe un archivo creado en paralelo", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "arca-download-publish-"));
+  const directory = await makeCanonicalTemporaryDirectory("arca-download-publish-");
   try {
     const destination = path.join(directory, "factura.pdf");
     const reservation = await reservePrivatePdfDestination(destination, directory, directory);
@@ -49,8 +50,8 @@ test("la publicación exclusiva no sobrescribe un archivo creado en paralelo", a
 
 
 test("una junction que escapa de downloads se rechaza por realpath", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "arca-download-root-"));
-  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "arca-download-outside-"));
+  const root = await makeCanonicalTemporaryDirectory("arca-download-root-");
+  const outside = await makeCanonicalTemporaryDirectory("arca-download-outside-");
   try {
     const linked = path.join(root, "linked");
     try {
@@ -68,8 +69,8 @@ test("una junction que escapa de downloads se rechaza por realpath", async (t) =
 
 
 test("una raíz downloads que es junction se rechaza", async (t) => {
-  const actualRoot = await fs.mkdtemp(path.join(os.tmpdir(), "arca-download-actual-"));
-  const linkParent = await fs.mkdtemp(path.join(os.tmpdir(), "arca-download-link-parent-"));
+  const actualRoot = await makeCanonicalTemporaryDirectory("arca-download-actual-");
+  const linkParent = await makeCanonicalTemporaryDirectory("arca-download-link-parent-");
   try {
     const linkedRoot = path.join(linkParent, "downloads");
     try {
@@ -87,7 +88,7 @@ test("una raíz downloads que es junction se rechaza", async (t) => {
 
 
 test("un outputDir privado inexistente se crea antes de reservar", async () => {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "arca-download-new-root-"));
+  const base = await makeCanonicalTemporaryDirectory("arca-download-new-root-");
   try {
     const outputDir = path.join(base, "nuevo", "downloads");
     const reservation = await reservePrivatePdfDestination(path.join(outputDir, "factura.pdf"), outputDir, base);
@@ -99,8 +100,8 @@ test("un outputDir privado inexistente se crea antes de reservar", async () => {
 });
 
 test("una reserva rechaza allowedRoot fuera del trustedRoot antes de crear carpetas", async () => {
-  const trustedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "arca-download-trusted-"));
-  const outsideRoot = path.join(os.tmpdir(), `arca-download-forbidden-${Date.now()}`);
+  const trustedRoot = await makeCanonicalTemporaryDirectory("arca-download-trusted-");
+  const outsideRoot = path.join(await canonicalTemporaryRoot(), `arca-download-forbidden-${process.pid}-${Date.now()}`);
   try {
     await assert.rejects(
       () => reservePrivatePdfDestination(path.join(outsideRoot, "factura.pdf"), outsideRoot, trustedRoot),

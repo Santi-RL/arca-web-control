@@ -9,6 +9,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
 $systemSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$administratorsSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+$currentPrincipal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+$currentIsAdministrator = $currentPrincipal.IsInRole($administratorsSid)
 $allow = [Security.AccessControl.AccessControlType]::Allow
 $rights = [Security.AccessControl.FileSystemRights]::FullControl
 $trustedOwners = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -45,7 +48,25 @@ function Set-ExclusiveAcl {
   $resolved = $item.FullName
   $acl = Get-Acl -LiteralPath $resolved
   $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
-  if (-not $trustedOwners.Contains($ownerSid)) { throw 'El recurso privado pertenece a una identidad no autorizada.' }
+  $administratorOwnedByCurrentToken = $ownerSid -eq $administratorsSid.Value -and $currentIsAdministrator
+  if (-not $trustedOwners.Contains($ownerSid) -and -not $administratorOwnedByCurrentToken) {
+    throw 'El recurso privado pertenece a una identidad no autorizada.'
+  }
+  $expectedOwnerSid = $ownerSid
+  # Windows puede asignar BUILTIN\Administrators como propietario predeterminado
+  # a los objetos creados por un token administrativo. Se admite únicamente
+  # cuando ese grupo está habilitado en el token actual y se normaliza de
+  # inmediato al SID personal antes de modificar la DACL. No se intenta volver
+  # a establecer el propietario cuando ya es el usuario, porque eso requeriría
+  # WRITE_OWNER innecesariamente en un proceso sin elevación.
+  if ($administratorOwnedByCurrentToken) {
+    $acl.SetOwner($currentSid)
+    $item.SetAccessControl($acl)
+    $acl = Get-Acl -LiteralPath $resolved
+    $normalizedOwnerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($normalizedOwnerSid -ne $currentSid.Value) { throw 'No se pudo normalizar el propietario del recurso privado.' }
+    $expectedOwnerSid = $currentSid.Value
+  }
   $acl.SetAccessRuleProtection($true, $false)
   foreach ($existingRule in @($acl.Access)) {
     $null = $acl.RemoveAccessRuleSpecific($existingRule)
@@ -75,7 +96,7 @@ function Set-ExclusiveAcl {
   if ($seen.Count -ne $expected.Count) { throw 'La ACL privada no contiene todas las identidades requeridas.' }
   if ($verified.AreAccessRulesProtected -ne $true) { throw 'La ACL privada conserva herencia habilitada.' }
   $verifiedOwnerSid = $verified.GetOwner([Security.Principal.SecurityIdentifier]).Value
-  if (-not $trustedOwners.Contains($verifiedOwnerSid)) { throw 'El recurso privado pertenece a una identidad no autorizada.' }
+  if ($verifiedOwnerSid -ne $expectedOwnerSid) { throw 'El recurso privado cambió de propietario durante la protección de la ACL.' }
 }
 
 function Assert-TreeHasNoReparsePoints {
