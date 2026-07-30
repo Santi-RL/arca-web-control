@@ -15,6 +15,7 @@ Archivo generado desde el registro de comandos del proyecto. No editar manualmen
 - `npm run arca:learn:start`: Inicia aprendizaje visible después del login.
 - `npm run arca:learn:cmd`: Inspecciona y controla de forma híbrida la sesión visible, agrega evidencia o finaliza el candidato.
 - `npm run arca:job:migrate`: Migra jobs v1 a schemaVersion 2.
+- `npm run arca:job:create`: Crea un job v2 privado desde JSON recibido por stdin y devuelve un identificador opaco.
 - `npm run arca:capability:sync`: Regenera documentación y referencias de la skill.
 - `npm run arca:capability:check`: Verifica manifiestos, evidencia y sincronización.
 - `npm run arca:capability:promote`: Promueve madurez con aprobación humana explícita.

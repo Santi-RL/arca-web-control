@@ -108,11 +108,11 @@ No copie credenciales, archivos CSV de clientes ni valores reales a un issue, pu
 
 ## Preparar una Factura C de servicios
 
-Parta de [jobs/factura.example.json](jobs/factura.example.json) y guarde el job real exclusivamente en `%LOCALAPPDATA%\ManejoARCA\jobs\private`. La sesión y el MCP rechazan cualquier otra ubicación, enlaces y archivos no JSON. El contrato vigente exige `schemaVersion: 2`, `currency: "ARS"`, un `operationId` único, el CUIT canónico del emisor, la condición frente al IVA del receptor, fechas ISO, CUIT válidos y el importe como cadena decimal de dos dígitos. La moneda no se infiere: si falta `currency` o tiene otro valor, el job se rechaza antes de navegar.
+Parta de [jobs/factura.example.json](jobs/factura.example.json) y guarde el job real exclusivamente en `%LOCALAPPDATA%\ManejoARCA\jobs\private`. Si los datos llegan por chat, use `npm run arca:job:create` con JSON por `stdin`; el comando resuelve el emisor, fija el alcance vigente, aplica ACL privada y devuelve un handle opaco. La sesión y el MCP rechazan cualquier otra ubicación, enlaces y archivos no JSON. El contrato vigente exige `schemaVersion: 2`, `currency: "ARS"`, un `operationId` único, el CUIT canónico del emisor, la condición frente al IVA del receptor, fechas ISO, CUIT válidos y el importe como cadena decimal de dos dígitos. La moneda no se infiere: si falta `currency` o tiene otro valor, el job se rechaza antes de navegar.
 
 ```powershell
 npm run arca:session:start -- --issuer <CUIT_EMISOR>
-npm run arca:session:cmd -- prepare-invoice "<RUTA_PRIVADA_JOB_V2>"
+npm run arca:session:cmd -- prepare-invoice "<JOB_HANDLE_O_RUTA_PRIVADA_JOB_V2>"
 ```
 
 El comando devuelve un `preparedInvoiceId`. Revise en el navegador el emisor, receptor, punto de venta, fechas, moneda local, condición de IVA, condición de venta, descripción y total. La preparación se detiene si `Moneda Extranjera` está marcada, falta o aparece de forma ambigua.

@@ -29,7 +29,7 @@ description: Operar de forma experimental y supervisada la web de ARCA en Window
 ## Facturas
 
 1. Aceptar como única capacidad automatizada vigente `invoice-services-single-item`: Factura C, concepto Servicios, moneda local y un ítem, únicamente hasta el resumen. Cualquier otra variante debe pasar por aprendizaje visible.
-2. Exigir un job `schemaVersion: 2` completo y validado.
+2. Exigir un job `schemaVersion: 2` completo y validado. Si los datos llegan por chat, crearlo exclusivamente con `arca:job:create` mediante JSON por `stdin`; conservar el `JOB_HANDLE` opaco y no construir el archivo con comandos temporales.
 3. Ejecutar `prepare-invoice <job>` y conservar el `preparedInvoiceId` devuelto.
 4. Mostrar al usuario todo el resumen verificado, incluida la fecha de emisión, período y vencimiento.
 5. No ejecutar `emit-prepared-invoice`: el manifiesto vigente mantiene la emisión de producción deshabilitada hasta una nueva validación visible y promoción humana.

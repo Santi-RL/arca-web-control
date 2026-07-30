@@ -16,7 +16,9 @@ export async function resolvePrivateInvoiceJobPath(value: string, privateJobsRoo
     const jobsReal = await fs.realpath(jobsPath);
     if (!isWithin(trustedReal, jobsReal) || isWithin(repositoryReal, jobsReal)) throw new Error("escaped-jobs-root");
 
-    const lexicalCandidate = path.resolve(value);
+    const lexicalCandidate = isPrivateJobHandle(value)
+      ? path.resolve(jobsPath, value)
+      : path.resolve(value);
     if (path.extname(lexicalCandidate).toLowerCase() !== ".json") throw new Error("invalid-extension");
     if (!isWithin(jobsPath, lexicalCandidate) || samePath(jobsPath, lexicalCandidate)) throw new Error("lexical-escape");
     const candidateStat = await fs.lstat(lexicalCandidate);
@@ -27,6 +29,10 @@ export async function resolvePrivateInvoiceJobPath(value: string, privateJobsRoo
   } catch {
     throw new Error("El job debe ser un archivo JSON regular dentro de la carpeta privada jobs\\private del runtime local.");
   }
+}
+
+function isPrivateJobHandle(value: string): boolean {
+  return /^invoice-\d{4}-\d{2}-\d{2}-[a-f0-9-]{16,64}\.json$/iu.test(value);
 }
 
 function samePath(left: string, right: string): boolean {

@@ -13,6 +13,7 @@ La plataforma soportada es Windows 10/11. Las credenciales canónicas viven en e
 ## Base implementada
 
 - Jobs `schemaVersion: 2`, moneda y condición frente al IVA explícitas, importes decimales exactos, CUIT canónico estricto y `operationId` idempotente.
+- Intake conversacional de jobs mediante JSON por `stdin`, resolución unívoca del emisor, identificadores opacos, escritura exclusiva y ACL privada.
 - Estado preparado inmutable con hash, huella de página y vencimiento de 60 minutos.
 - Ledger con estados `prepared`, `emitting`, `emitted`, `failed_before_emit` y `unknown`.
 - Selectores exactos, rechazo de ambigüedades y validación semántica de filas y secciones del resumen contra controles reales.

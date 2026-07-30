@@ -16,6 +16,7 @@ const commands = [
   ["arca:learn:start", "Inicia aprendizaje visible después del login."],
   ["arca:learn:cmd", "Inspecciona y controla de forma híbrida la sesión visible, agrega evidencia o finaliza el candidato."],
   ["arca:job:migrate", "Migra jobs v1 a schemaVersion 2."],
+  ["arca:job:create", "Crea un job v2 privado desde JSON recibido por stdin y devuelve un identificador opaco."],
   ["arca:capability:sync", "Regenera documentación y referencias de la skill."],
   ["arca:capability:check", "Verifica manifiestos, evidencia y sincronización."],
   ["arca:capability:promote", "Promueve madurez con aprobación humana explícita."],

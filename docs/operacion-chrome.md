@@ -21,12 +21,14 @@ El modo `production-hidden` está deshabilitado. No se automatizan captchas ni s
 
 1. Instalar dependencias reproducibles con `npm ci` y el navegador con `npx playwright install chromium`.
 2. Guardar la credencial mediante `npm run arca:credentials:set -- "<ETIQUETA>"`.
-3. Mantener el job real exclusivamente como archivo `.json` regular dentro de `%LOCALAPPDATA%\ManejoARCA\jobs\private`.
+3. Mantener el job real exclusivamente como archivo `.json` regular dentro de `%LOCALAPPDATA%\ManejoARCA\jobs\private`. Si los datos llegan por chat, crearlo con `arca:job:create` por `stdin` y conservar únicamente el handle opaco devuelto.
 4. Partir del contrato ficticio [jobs/factura.example.json](../jobs/factura.example.json) y guardar el job real únicamente en `%LOCALAPPDATA%\ManejoARCA\jobs\private`; la sesión rechaza otras ubicaciones y enlaces.
 
 `outputDir` es opcional. Si se omite, usa la raíz privada `downloads`; por compatibilidad puede definir una subcarpeta relativa, pero nunca una ruta absoluta, UNC o con segmentos `..`. La carpeta definitiva no se decide por factura: se genera automáticamente por CUIT emisor, tipo de artefacto, año y mes.
 
 Las claves se leen únicamente desde el Administrador de credenciales de Windows. No deben aparecer en el chat, argumentos, archivos del repositorio, logs ni capturas.
+
+`arca:job:create` acepta solo los campos de la Factura C de Servicios de un ítem, resuelve `issuerSelector` contra el almacén local, fija el alcance fiscal cerrado, genera un `operationId` aleatorio, valida el job completo y lo escribe de forma exclusiva con ACL privada. La entrada viaja por `stdin`; el comando no imprime el contenido, nombres ni CUIT y devuelve únicamente `JOB_HANDLE` y `OPERATION_ID`. Un handle puede pasarse directamente a `prepare-invoice` y siempre se resuelve dentro de `jobs\private`.
 
 ## Preparar una factura hasta el resumen
 
@@ -41,7 +43,7 @@ El inicio solo es correcto si devuelve `READY_STATE=portal`. El flujo se detiene
 Preparar el job en esa misma sesión:
 
 ```powershell
-npm run arca:session:cmd -- prepare-invoice "<RUTA_PRIVADA_JOB_V2>"
+npm run arca:session:cmd -- prepare-invoice "<JOB_HANDLE_O_RUTA_PRIVADA_JOB_V2>"
 ```
 
 El comando debe llegar a `RESUMEN DE DATOS (PASO 4 DE 4)` y devolver un `preparedInvoiceId`. Antes de considerar válida la preparación, comprobar en el navegador:

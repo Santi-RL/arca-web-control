@@ -27,6 +27,7 @@
     "arca:credentials:migrate-vault": "tsx scripts/arca-credentials.mts migrate-vault",
     "arca:credentials:import-csv": "tsx scripts/arca-credentials-import.mts",
     "arca:job:migrate": "tsx scripts/arca-job-migrate.mts",
+    "arca:job:create": "tsx scripts/arca-job-create.mts",
     "arca:learn:start": "tsx scripts/arca-learn-start.mts",
     "arca:learn:cmd": "tsx scripts/arca-learn-cmd.mts",
     "arca:capability:sync": "tsx scripts/arca-capability.mts sync",

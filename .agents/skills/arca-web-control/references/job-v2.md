@@ -27,6 +27,7 @@ Ejemplo sintético:
 
 Reglas:
 
+- Cuando el usuario proporciona los datos por chat, crear el archivo mediante `npm run arca:job:create`, enviando el JSON exclusivamente por `stdin`. El campo de entrada `issuerSelector` puede ser un nombre solo si resuelve exactamente una credencial; el comando fija `Factura C`, `Servicios`, `ARS`, genera un `operationId` aleatorio y devuelve un `JOB_HANDLE` sin nombres ni CUIT.
 - Guardar todo job real exclusivamente como archivo `.json` regular dentro de `%LOCALAPPDATA%\ManejoARCA\jobs\private`; la sesión y el MCP rechazan otras ubicaciones y enlaces.
 - Usar un `operationId` estable y único; nunca reciclarlo para otra factura.
 - Mantener `amount` como decimal con dos dígitos.

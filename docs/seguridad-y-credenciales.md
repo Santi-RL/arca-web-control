@@ -92,4 +92,6 @@ El importador restringe la ACL del archivo al usuario actual y `SYSTEM`, no impr
 
 Los jobs reales, perfiles, capturas, PDFs, metadatos JSON, logs, tokens locales de sesión, candidatos de aprendizaje y ledger son privados. Solo pueden incorporarse a Git código general, documentación sanitizada y fixtures completamente ficticios que no deriven de una operación real.
 
+Los datos de una factura recibidos por chat deben convertirse en job con `arca:job:create`. El comando lee el JSON por `stdin`, no admite campos fuera del alcance vigente, resuelve el nombre del emisor solo si es unívoco, no recupera la clave fiscal, escribe con creación exclusiva y aplica la ACL privada. Su salida no refleja el contenido: devuelve un identificador aleatorio utilizable por `prepare-invoice`.
+
 Ante un artefacto sensible dentro del repositorio: detener la operación, moverlo al runtime privado, revisar el historial Git antes de publicar y rotar la credencial si existe riesgo de exposición.
