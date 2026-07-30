@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ResolvedInvoiceJob } from "../types.js";
 import { publishReservedPdf, reservePrivatePdfDestination } from "../config/privateDownloads.js";
+import { acquireLocalOsMutex } from "../io/osMutex.js";
 
 export type InvoiceIssuerIdentity = {
   cuit: string;
@@ -58,7 +59,8 @@ export async function buildInvoiceArtifactPaths(
   if (issuerCuit !== canonicalCuit(job.issuerKey)) {
     throw new Error("El CUIT del archivo no coincide con el emisor del job.");
   }
-  const issuerName = sanitizeWindowsLabel(issuer.name, "Emisor", 48);
+  const issuerName = validateIssuerDisplayName(issuer.name);
+  const issuerFileLabel = sanitizeWindowsLabel(issuerName, "Emisor", 48);
   const voucher = parseVoucherType(job.voucherType);
   const voucherNumber = parseVoucherNumber(evidence.voucherNumber);
   if (voucherNumber.pointOfSale !== job.pointOfSale.padStart(5, "0")) {
@@ -67,12 +69,12 @@ export async function buildInvoiceArtifactPaths(
   if (!/^\d{14}$/u.test(evidence.cae)) throw new Error("El CAE del comprobante no tiene un formato verificable.");
   if (!/^[a-f0-9]{64}$/iu.test(evidence.pdfSha256)) throw new Error("El hash SHA-256 del PDF no tiene un formato verificable.");
   const date = parseIsoDate(job.date);
-  const issuerDirectoryName = await resolveIssuerDirectoryName(job.outputDir, issuerCuit, issuerName);
-  const fileStem = `${issuerName} - ${voucher.code}-${voucher.letter} - ${voucherNumber.fullNumber}`;
+  const issuerDirectory = await resolveIssuerDirectory(job.outputDir, issuerCuit, issuerFileLabel);
+  const fileStem = `${issuerDirectory.fileLabel} - ${voucher.code}-${voucher.letter} - ${voucherNumber.fullNumber}`;
   const directory = path.join(
     job.outputDir,
     "Emisores",
-    issuerDirectoryName,
+    issuerDirectory.name,
     "Comprobantes Emitidos",
     date.year,
     date.month,
@@ -104,12 +106,39 @@ export async function buildInvoiceArtifactPaths(
   };
 }
 
-export async function publishInvoiceArtifacts(
+export async function publishInvoiceArtifactsForJob(
+  sourcePdfPath: string,
+  job: ResolvedInvoiceJob,
+  issuer: InvoiceIssuerIdentity,
+  evidence: InvoiceArtifactEvidence,
+  jobHash: string,
+  allowedRoot: string,
+  trustedRoot: string,
+  archivedAt = new Date().toISOString(),
+): Promise<{ pdfPath: string; metadataPath: string; pdfSha256: string }> {
+  const issuerCuit = canonicalCuit(issuer.cuit);
+  if (issuerCuit !== canonicalCuit(job.issuerKey)) {
+    throw new Error("El CUIT del archivo no coincide con el emisor del job.");
+  }
+  const releaseIssuerArchive = await acquireLocalOsMutex(
+    issuerArchiveMutexIdentity(job.outputDir, issuerCuit),
+    "el archivo privado del emisor",
+    { timeoutMs: 30_000, retryDelayMs: 50 },
+  );
+  try {
+    const artifacts = await buildInvoiceArtifactPaths(job, issuer, evidence, jobHash, archivedAt);
+    return await publishResolvedInvoiceArtifacts(sourcePdfPath, artifacts, allowedRoot, trustedRoot);
+  } finally {
+    await releaseIssuerArchive();
+  }
+}
+
+async function publishResolvedInvoiceArtifacts(
   sourcePdfPath: string,
   artifacts: InvoiceArtifactPaths,
   allowedRoot: string,
   trustedRoot: string,
-): Promise<{ pdfPath: string; metadataPath: string }> {
+): Promise<{ pdfPath: string; metadataPath: string; pdfSha256: string }> {
   const source = await validateExistingPrivateFile(sourcePdfPath, allowedRoot, trustedRoot, ".pdf");
   const sourceHash = await sha256File(source);
   if (sourceHash !== artifacts.metadata.pdfSha256) {
@@ -117,12 +146,25 @@ export async function publishInvoiceArtifacts(
   }
 
   const pdfPath = await publishPdfIdempotently(source, artifacts.pdfPath, sourceHash, allowedRoot, trustedRoot);
+  const finalPdf = await validateExistingPrivateFile(pdfPath, allowedRoot, trustedRoot, ".pdf");
+  const finalPdfSha256 = await sha256File(finalPdf);
+  if (finalPdfSha256 !== sourceHash || finalPdfSha256 !== artifacts.metadata.pdfSha256) {
+    throw new Error("El hash del PDF canónico publicado no coincide con la descarga validada.");
+  }
   await publishMetadataIdempotently(artifacts.metadataPath, artifacts.metadata, allowedRoot, trustedRoot);
   if (!samePath(source, pdfPath)) await fs.rm(source, { force: true });
-  return { pdfPath, metadataPath: artifacts.metadataPath };
+  return { pdfPath, metadataPath: artifacts.metadataPath, pdfSha256: finalPdfSha256 };
 }
 
-async function resolveIssuerDirectoryName(outputDir: string, issuerCuit: string, issuerName: string): Promise<string> {
+function issuerArchiveMutexIdentity(outputDir: string, issuerCuit: string): string {
+  const resolvedRoot = path.resolve(outputDir);
+  const normalizedRoot = process.platform === "win32"
+    ? resolvedRoot.toLocaleLowerCase("en-US")
+    : resolvedRoot;
+  return `invoice-issuer-archive\0${normalizedRoot}\0${issuerCuit}`;
+}
+
+async function resolveIssuerDirectory(outputDir: string, issuerCuit: string, issuerName: string): Promise<{ name: string; fileLabel: string }> {
   const formattedCuit = formatCuit(issuerCuit);
   const prefix = `${formattedCuit} - `;
   const issuersRoot = path.join(outputDir, "Emisores");
@@ -130,7 +172,7 @@ async function resolveIssuerDirectoryName(outputDir: string, issuerCuit: string,
   try {
     entries = await fs.readdir(issuersRoot, { withFileTypes: true });
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return `${prefix}${issuerName}`;
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return { name: `${prefix}${issuerName}`, fileLabel: issuerName };
     throw error;
   }
   const matches = entries.filter((entry) => entry.name.toLocaleLowerCase("es-AR").startsWith(prefix.toLocaleLowerCase("es-AR")));
@@ -140,7 +182,10 @@ async function resolveIssuerDirectoryName(outputDir: string, issuerCuit: string,
   if (matches.length > 1) {
     throw new Error(`Existen varias carpetas privadas para el CUIT ${formattedCuit}; se requiere revisión manual.`);
   }
-  return matches[0]?.name ?? `${prefix}${issuerName}`;
+  const existing = matches[0]?.name;
+  if (!existing) return { name: `${prefix}${issuerName}`, fileLabel: issuerName };
+  const stableLabel = sanitizeWindowsLabel(existing.slice(prefix.length), "Emisor", 48);
+  return { name: existing, fileLabel: stableLabel };
 }
 
 async function publishPdfIdempotently(
@@ -228,7 +273,9 @@ async function validateExistingPrivateFile(
     throw new Error(`El artefacto privado debe terminar en ${extension}.`);
   }
   const stat = await fs.lstat(resolved);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("El artefacto privado debe ser un archivo regular, no un enlace.");
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+    throw new Error("El artefacto privado debe ser un archivo regular con una única identidad; no se admiten enlaces ni hard links.");
+  }
   const real = await fs.realpath(resolved);
   if (!samePath(real, resolved)) throw new Error("El artefacto privado no puede atravesar enlaces o junctions.");
   await validateContainedPath(real, allowedRoot, trustedRoot);
@@ -315,6 +362,14 @@ function sanitizeWindowsLabel(value: string, fallback: string, maximumLength: nu
   const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
   const safe = !normalized || reserved.test(normalized) ? fallback : normalized;
   return Array.from(safe).slice(0, maximumLength).join("").replace(/[. ]+$/gu, "") || fallback;
+}
+
+function validateIssuerDisplayName(value: string): string {
+  const normalized = value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  if (!normalized || /[\u0000-\u001f\u007f]/u.test(normalized) || Array.from(normalized).length > 200) {
+    throw new Error("El nombre verificado del emisor no es válido para los metadatos privados.");
+  }
+  return normalized;
 }
 
 async function sha256File(filePath: string): Promise<string> {

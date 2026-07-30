@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createHash } from "node:crypto";
+import { makeCanonicalTemporaryDirectory } from "../testing/temporaryDirectory.js";
+import { OperationLedger } from "../arca/operationLedger.js";
+import { resolvePrivateInvoiceJobPath } from "../config/privateJobs.js";
 import { createPrivateInvoiceJob } from "./privateIntake.js";
 
 const input = {
+  intentId: "00000000-0000-4000-8000-000000000001",
   issuerSelector: "EMISOR FICTICIO",
   recipientCuit: "20000000001",
   recipientName: "RECEPTOR FICTICIO",
@@ -20,20 +24,23 @@ const input = {
 };
 
 test("crea un job privado exclusivo, cerrado al alcance vigente y sin datos en el handle", async (context) => {
-  const runtime = await fs.mkdtemp(path.join(os.tmpdir(), "arca-job-intake-"));
+  const runtime = await makeCanonicalTemporaryDirectory("arca-job-intake-");
   context.after(async () => { await fs.rm(runtime, { recursive: true, force: true }); });
   const jobs = path.join(runtime, "jobs", "private");
   await fs.mkdir(jobs, { recursive: true });
-  const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
   const created = await createPrivateInvoiceJob(input, {
     privateJobsRoot: jobs,
     trustedRuntimeRoot: runtime,
     resolveIssuer: () => ({ issuerKey: "20000000001", cuit: "20000000001" }),
-    randomId: () => id,
     secureFile: async () => undefined,
   });
-  assert.equal(created.handle, `invoice-2030-06-15-${id}.json`);
+  assert.match(created.handle, /^invoice-[a-f0-9]{64}\.json$/u);
+  assert.doesNotMatch(created.handle, /2030-06-15/);
   assert.doesNotMatch(created.handle, /EMISOR|RECEPTOR/iu);
+  assert.equal(
+    await resolvePrivateInvoiceJobPath(created.handle, jobs, runtime),
+    await fs.realpath(path.join(jobs, created.handle)),
+  );
   const saved = JSON.parse(await fs.readFile(path.join(jobs, created.handle), "utf8")) as Record<string, unknown>;
   assert.equal(saved.issuerKey, "20000000001");
   assert.equal(saved.voucherType, "Factura C");
@@ -42,17 +49,34 @@ test("crea un job privado exclusivo, cerrado al alcance vigente y sin datos en e
   assert.equal(saved.pointOfSale, "00001");
   assert.equal(saved.dueDate, "2030-06-20");
   assert.equal(saved.outputDir, undefined);
-  await assert.rejects(() => createPrivateInvoiceJob(input, {
+  const reused = await createPrivateInvoiceJob(input, {
     privateJobsRoot: jobs,
     trustedRuntimeRoot: runtime,
     resolveIssuer: () => ({ issuerKey: "20000000001", cuit: "20000000001" }),
-    randomId: () => id,
     secureFile: async () => undefined,
-  }), /no se sobrescribió/i);
+  });
+  assert.deepEqual(reused, created);
+  assert.equal((await fs.readdir(jobs)).length, 1);
+
+  await assert.rejects(() => createPrivateInvoiceJob({ ...input, amount: "123456.79" }, {
+    privateJobsRoot: jobs,
+    trustedRuntimeRoot: runtime,
+    resolveIssuer: () => ({ issuerKey: "20000000001", cuit: "20000000001" }),
+    secureFile: async () => undefined,
+  }), /colisionó con otro contenido/);
+
+  const distinct = await createPrivateInvoiceJob({ ...input, intentId: "00000000-0000-4000-8000-000000000002" }, {
+    privateJobsRoot: jobs,
+    trustedRuntimeRoot: runtime,
+    resolveIssuer: () => ({ issuerKey: "20000000001", cuit: "20000000001" }),
+    secureFile: async () => undefined,
+  });
+  assert.notEqual(distinct.operationId, created.operationId);
+  assert.equal((await fs.readdir(jobs)).length, 2);
 });
 
 test("redacta fallas de resolución del emisor antes de escribir", async (context) => {
-  const runtime = await fs.mkdtemp(path.join(os.tmpdir(), "arca-job-intake-resolution-"));
+  const runtime = await makeCanonicalTemporaryDirectory("arca-job-intake-resolution-");
   context.after(async () => { await fs.rm(runtime, { recursive: true, force: true }); });
   const jobs = path.join(runtime, "jobs", "private");
   await fs.mkdir(jobs, { recursive: true });
@@ -67,4 +91,45 @@ test("redacta fallas de resolución del emisor antes de escribir", async (contex
     return true;
   });
   assert.deepEqual(await fs.readdir(jobs), []);
+});
+
+test("una selección humana de domicilio revisa el mismo intento solo antes del límite irreversible", async (context) => {
+  const runtime = await makeCanonicalTemporaryDirectory("arca-job-intake-revision-");
+  context.after(async () => { await fs.rm(runtime, { recursive: true, force: true }); });
+  const jobs = path.join(runtime, "jobs", "private");
+  await fs.mkdir(jobs, { recursive: true });
+  const options = {
+    privateJobsRoot: jobs,
+    trustedRuntimeRoot: runtime,
+    resolveIssuer: () => ({ issuerKey: "20000000001", cuit: "20000000001" }),
+    secureFile: async () => undefined,
+  };
+  const first = await createPrivateInvoiceJob(input, options);
+  const firstHash = createHash("sha256").update(await fs.readFile(path.join(jobs, first.handle))).digest("hex");
+  const ledger = new OperationLedger(path.join(runtime, "ledger"));
+  await ledger.claimPreparation(first.operationId, firstHash, "prepared-address-1");
+  await ledger.markFailedBeforeEmit(first.operationId, "prepared-address-1", firstHash, "ARCA devolvió más de un domicilio.");
+
+  const revised = await createPrivateInvoiceJob({
+    ...input,
+    intentRevision: 2,
+    recipientCommercialAddress: "DOMICILIO FICTICIO 123",
+  }, options);
+  const revisedHash = createHash("sha256").update(await fs.readFile(path.join(jobs, revised.handle))).digest("hex");
+  assert.equal(revised.operationId, first.operationId);
+  assert.notEqual(revised.handle, first.handle);
+  assert.notEqual(revisedHash, firstHash);
+  await ledger.claimPreparation(revised.operationId, revisedHash, "prepared-address-2");
+  await ledger.markPreparedUnknown(revised.operationId, "prepared-address-2", revisedHash, "La página pudo cambiar.");
+
+  const forbiddenRevision = await createPrivateInvoiceJob({
+    ...input,
+    intentRevision: 3,
+    recipientCommercialAddress: "OTRO DOMICILIO FICTICIO 456",
+  }, options);
+  const forbiddenHash = createHash("sha256").update(await fs.readFile(path.join(jobs, forbiddenRevision.handle))).digest("hex");
+  await assert.rejects(
+    () => ledger.claimPreparation(forbiddenRevision.operationId, forbiddenHash, "prepared-address-3"),
+    /unknown.*prohibido/i,
+  );
 });

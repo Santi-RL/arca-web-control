@@ -10,11 +10,12 @@ export type EmissionResult = {
   bodyText: string;
 };
 
-export async function executeControlledEmission(page: Page, options: { onIrreversible?: () => Promise<void> } = {}): Promise<EmissionResult> {
+export async function executeControlledEmission(page: Page, options: { onIrreversible?: () => Promise<void>; onFirstClick?: () => void } = {}): Promise<EmissionResult> {
   assertOfficialArcaRcelUrl(page.url(), "la lectura del resumen previo a emitir");
   const confirmData = await assertUnique(page.getByRole("button", { name: /Confirmar Datos/i }).or(page.getByRole("link", { name: /Confirmar Datos/i })), "Confirmar Datos");
   await options.onIrreversible?.();
   assertOfficialArcaRcelUrl(page.url(), "la confirmación de los datos");
+  options.onFirstClick?.();
   await confirmData.click();
   await waitForPageSettled(page);
   assertOfficialArcaRcelUrl(page.url(), "la lectura del modal de confirmación");

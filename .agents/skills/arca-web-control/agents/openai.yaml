@@ -1,6 +1,6 @@
 interface:
   display_name: "ARCA Web Control"
-  short_description: "ARCA supervisado en Windows (experimental)"
-  default_prompt: "Usa $arca-web-control para operar ARCA en Windows dentro del alcance aprendido y con confirmación humana obligatoria."
+  short_description: "Control conversacional supervisado de ARCA"
+  default_prompt: "Usa $arca-web-control para controlar ARCA desde el chat, preparar la operación en Chrome visible y separar toda confirmación irreversible."
 policy:
   allow_implicit_invocation: false

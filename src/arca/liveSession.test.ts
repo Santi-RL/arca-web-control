@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import { ResolvedInvoiceJob } from "../types.js";
-import { assertEmissionResultMatchesPdf, buildPreparedInvoiceSummary, classifyReadyState, invalidatesPreparation, missingExpectedSummarySignals } from "./liveSession.js";
+import { assertEmissionResultMatchesPdf, buildPreparedInvoiceSummary, classifyReadyState, invalidatesPreparation, missingExpectedSummarySignals, redactSessionStateForLog } from "./liveSession.js";
 
 function invoiceJob(): ResolvedInvoiceJob {
   return {
@@ -68,6 +68,10 @@ function completeControlEvidence() {
     recipientCommercialAddress: "Calle Ficticia 100, CABA",
     description: "Servicios de Consultoría",
     amount: "3000000.00",
+    quantity: "1",
+    unitPrice: "3000000.00",
+    subtotal: "3000000.00",
+    total: "3000000.00",
   };
 }
 
@@ -76,8 +80,36 @@ test("prepare-invoice invalida cualquier preparación anterior antes de comenzar
   assert.equal(invalidatesPreparation("status"), false);
   assert.equal(invalidatesPreparation("snapshot"), false);
   assert.equal(invalidatesPreparation("screenshot"), false);
+  assert.equal(invalidatesPreparation("resume-authentication"), true);
   assert.equal(invalidatesPreparation("emit-prepared-invoice"), false);
   assert.equal(invalidatesPreparation("revalidate-prepared-invoice"), false);
+});
+
+test("el log de sesión omite CUIT, URL y rutas privadas", () => {
+  const redacted = redactSessionStateForLog({
+    issuerKey: "20000000001",
+    url: "https://auth.afip.gob.ar/contribuyente_/login.xhtml",
+    title: "Portal",
+    readyState: "portal",
+    captchaVisible: false,
+    pageCount: 1,
+    artifactDir: path.resolve("runtime-ficticio", "artifacts"),
+    visibilityMode: "visible",
+    revalidationCapability: "invoice-services-single-item",
+    revalidationConsumed: false,
+  });
+  assert.deepEqual(redacted, {
+    readyState: "portal",
+    captchaVisible: false,
+    pageCount: 1,
+    visibilityMode: "visible",
+    learnedCapability: undefined,
+    revalidationCapability: "invoice-services-single-item",
+    revalidationConsumed: false,
+  });
+  assert.equal("issuerKey" in redacted, false);
+  assert.equal("url" in redacted, false);
+  assert.equal("artifactDir" in redacted, false);
 });
 
 test("el resultado visible y el PDF deben coincidir en número y CAE", () => {

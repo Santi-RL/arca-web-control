@@ -126,6 +126,14 @@ export async function retrySessionStatus<T>(probe: () => Promise<T | undefined>,
   return undefined;
 }
 
+export function sessionStatusPayloadFromHttp(statusCode: number, payload: unknown): unknown | undefined {
+  if (statusCode >= 200 && statusCode < 300) return payload;
+  if (statusCode === 409 && payload && typeof payload === "object" && (payload as { status?: unknown }).status === "busy") {
+    return { ...(payload as Record<string, unknown>), busy: true };
+  }
+  return undefined;
+}
+
 export function createSessionRuntimeAclVerificationMessage(root: string, verificationId = randomUUID()): SessionRuntimeAclVerificationMessage {
   if (!path.isAbsolute(root) || root.includes("\0")) throw new Error("La raíz atestiguada del runtime debe ser absoluta.");
   if (!isVerificationId(verificationId)) throw new Error("El identificador de atestación del runtime es inválido.");

@@ -1,3 +1,5 @@
+import { captchaRequiredErrorFromLog } from "./captchaErrors.js";
+
 export const invalidArcaCredentialsMarker = "ARCA_INVALID_CREDENTIALS";
 
 export class InvalidArcaCredentialsError extends Error {
@@ -14,7 +16,7 @@ export function isInvalidArcaCredentialsMessage(value: string): boolean {
 }
 
 export function startupErrorFromLog(log: string, fallback: string): Error {
-  return invalidCredentialsErrorFromLog(log) ?? new Error(fallback);
+  return invalidCredentialsErrorFromLog(log) ?? captchaRequiredErrorFromLog(log) ?? new Error(fallback);
 }
 
 export function invalidCredentialsErrorFromLog(log: string): InvalidArcaCredentialsError | undefined {

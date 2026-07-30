@@ -1,13 +1,18 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { ensurePrivateFile } from "../config/runtimePaths.js";
+import { CredentialProviderError } from "../config/credentialProvider.js";
 import { invoiceJobV2Schema } from "./schema.js";
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 
 export const privateInvoiceIntakeSchema = z.object({
+  intentId: z.string().uuid(),
+  intentRevision: z.number().int().min(1).max(9999).default(1),
   issuerSelector: z.string().trim().min(1).max(200),
   recipientCuit: z.string().trim().min(1),
   recipientName: z.string().trim().min(1).optional(),
@@ -34,7 +39,6 @@ type CreatePrivateInvoiceJobOptions = {
   privateJobsRoot: string;
   trustedRuntimeRoot: string;
   resolveIssuer: (selector: string) => { issuerKey: string; cuit: string };
-  randomId?: () => string;
   secureFile?: (filePath: string) => Promise<void>;
 };
 
@@ -46,27 +50,17 @@ export async function createPrivateInvoiceJob(
   let issuer: { issuerKey: string; cuit: string };
   try {
     issuer = options.resolveIssuer(input.issuerSelector);
-  } catch {
+  } catch (error) {
+    if (error instanceof CredentialProviderError) throw error;
     throw new Error("El emisor no resolvió exactamente una credencial local; indicá su CUIT para desambiguar.");
   }
   if (issuer.issuerKey !== issuer.cuit) {
     throw new Error("La identidad canónica del emisor no coincide con su CUIT.");
   }
 
-  const randomId = options.randomId ?? randomUUID;
-  const suffix = randomId().toLowerCase();
-  if (!/^[a-f0-9-]{16,64}$/u.test(suffix)) throw new Error("No se pudo generar un identificador privado seguro.");
-  const operationId = `invoice-${input.date}-${suffix}`;
-  const handle = `${operationId}.json`;
-  const destination = await resolveNewPrivateJobDestination(
-    handle,
-    options.privateJobsRoot,
-    options.trustedRuntimeRoot,
-  );
-
-  const parsed = invoiceJobV2Schema.parse({
+  const normalizedWithoutIdentity = invoiceJobV2Schema.parse({
     schemaVersion: 2,
-    operationId,
+    operationId: "invoice-idempotency-seed",
     issuerKey: issuer.cuit,
     recipientCuit: input.recipientCuit,
     recipientName: input.recipientName,
@@ -84,6 +78,22 @@ export async function createPrivateInvoiceJob(
     description: input.description,
     amount: input.amount,
   });
+  const { operationId: _seed, ...canonicalInvoice } = normalizedWithoutIdentity;
+  // La intención distingue comprobantes legítimamente idénticos y permanece
+  // estable en los reintentos de una misma solicitud conversacional. No se
+  // deriva del payload fiscal: campos opcionales/defaults no pueden eludir ni
+  // fusionar accidentalmente un estado unknown/emitted.
+  const intentDigest = createHash("sha256").update(`invoice-intent-v1\0${input.intentId}`, "utf8").digest("hex");
+  const revisionDigest = createHash("sha256").update(`invoice-intent-revision-v1\0${input.intentId}\0${input.intentRevision}`, "utf8").digest("hex");
+  const operationId = `invoice-chat-${intentDigest}`;
+  const handle = `invoice-${revisionDigest}.json`;
+  const destination = await resolveNewPrivateJobDestination(
+    handle,
+    options.privateJobsRoot,
+    options.trustedRuntimeRoot,
+  );
+
+  const parsed = invoiceJobV2Schema.parse({ ...canonicalInvoice, operationId });
   const persisted = { ...parsed } as Record<string, unknown>;
   if (persisted.outputDir === ".") delete persisted.outputDir;
 
@@ -101,12 +111,44 @@ export async function createPrivateInvoiceJob(
   } catch (error) {
     if (created) await fs.unlink(destination).catch(() => undefined);
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error("El identificador privado del job ya existe; no se sobrescribió ningún archivo.");
+      const existing = await readExistingCanonicalJobAfterConcurrentCreate(destination);
+      if (isDeepStrictEqual(jsonValue(existing), jsonValue(parsed))) {
+        await (options.secureFile ?? ensurePrivateFile)(destination);
+        return { handle, operationId };
+      }
+      throw new Error("El identificador idempotente del job colisionó con otro contenido; no se sobrescribió ningún archivo.");
     }
     throw error;
   }
 
   return { handle, operationId };
+}
+
+function jsonValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+async function readExistingCanonicalJob(filePath: string): Promise<ReturnType<typeof invoiceJobV2Schema.parse>> {
+  try {
+    const stat = await fs.lstat(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("invalid-existing-job");
+    return invoiceJobV2Schema.parse(JSON.parse(await fs.readFile(filePath, "utf8")));
+  } catch {
+    throw new Error("El job idempotente existente no es un archivo canónico válido; se requiere revisión manual.");
+  }
+}
+
+async function readExistingCanonicalJobAfterConcurrentCreate(filePath: string): Promise<ReturnType<typeof invoiceJobV2Schema.parse>> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      return await readExistingCanonicalJob(filePath);
+    } catch (error) {
+      lastError = error;
+      await delay(25);
+    }
+  }
+  throw lastError;
 }
 
 async function resolveNewPrivateJobDestination(handle: string, privateJobsRoot: string, trustedRuntimeRoot: string): Promise<string> {

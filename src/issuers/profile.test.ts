@@ -35,12 +35,15 @@ test("el perfil rechaza códigos de actividad y duplicados inválidos", () => {
 function runtimePaths(root: string): RuntimePaths {
   return {
     root,
+    config: path.join(root, "config"),
     profiles: path.join(root, "profiles"),
     issuers: path.join(root, "issuers"),
     sessions: path.join(root, "sessions"),
     learning: path.join(root, "learning"),
     ledger: path.join(root, "ledger"),
     privateJobs: path.join(root, "jobs", "private"),
+    privateImport: path.join(root, "private-import"),
+    guided: path.join(root, "guided"),
     logs: path.join(root, "logs"),
     downloads: path.join(root, "downloads"),
   };

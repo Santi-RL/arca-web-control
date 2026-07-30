@@ -9,13 +9,16 @@ Archivo generado desde el registro de comandos del proyecto. No editar manualmen
 - `npm run arca:credentials:migrate-env`: Migra temporalmente desde .env.local.
 - `npm run arca:credentials:migrate-vault`: Migra explícitamente credenciales legacy al esquema canónico por CUIT.
 - `npm run arca:credentials:import-csv`: Importa localmente un CSV privado con simulación, CUIT único y rollback.
+- `npm run arca:credentials:provider`: Consulta o selecciona Windows o un archivo JSON externo administrado por el usuario.
+- `npm run arca:invoice:prepare-chat`: Valida datos conversacionales, crea o reutiliza el job privado idempotente, inicia o reutiliza Chrome visible y devuelve el resumen.
 - `npm run arca:session:start`: Inicia una sesión y exige READY_STATE=portal; la revalidación irreversible requiere un modo visible explícito y exclusivo.
-- `npm run arca:session:cmd`: Ejecuta comandos tipados sobre la sesión actual; revalidate-prepared-invoice exige preparedInvoiceId vigente y EMITIR.
+- `npm run arca:session:cmd`: Ejecuta comandos tipados sobre la sesión actual; resume-authentication exige una intervención humana previa y revalidate-prepared-invoice exige preparedInvoiceId vigente y EMITIR.
 - `npm run arca:session:stop`: Cierra la sesión de forma controlada.
-- `npm run arca:learn:start`: Inicia aprendizaje visible después del login.
-- `npm run arca:learn:cmd`: Inspecciona y controla de forma híbrida la sesión visible, agrega evidencia o finaliza el candidato.
+- `npm run arca:learn:start`: Inicia aprendizaje visible; ante captcha conserva Chrome y publica el estado pausado.
+- `npm run arca:learn:cmd`: Reanuda explícitamente una pausa de autenticación, inspecciona y controla de forma híbrida la sesión visible, agrega evidencia o finaliza el candidato.
 - `npm run arca:job:migrate`: Migra jobs v1 a schemaVersion 2.
-- `npm run arca:job:create`: Crea un job v2 privado desde JSON recibido por stdin y devuelve un identificador opaco.
+- `npm run arca:job:create`: Crea o reutiliza un job v2 idempotente desde JSON recibido por stdin y devuelve un identificador opaco.
+- `npm run arca:runtime:repair`: Migra o repara explícitamente las ACL administradas y escribe el marcador de layout; nunca se ejecuta en el hot path.
 - `npm run arca:capability:sync`: Regenera documentación y referencias de la skill.
 - `npm run arca:capability:check`: Verifica manifiestos, evidencia y sincronización.
 - `npm run arca:capability:promote`: Promueve madurez con aprobación humana explícita.

@@ -13,3 +13,11 @@ test("writeJsonAtomic reemplaza estado previo sin dejar temporales", async () =>
   assert.deepEqual(await readJsonIfExists(filePath), { version: 2 });
   assert.deepEqual((await fs.readdir(directory)).sort(), ["state.json"]);
 });
+
+test("writeJsonAtomic fuerza el temporal antes del rename", async () => {
+  const source = await fs.readFile(new URL("./atomicJson.ts", import.meta.url), "utf8");
+  const sync = source.indexOf("await handle.sync()");
+  const close = source.indexOf("await handle.close()", sync);
+  const rename = source.indexOf("await fs.rename(temporary, filePath)", close);
+  assert.ok(sync >= 0 && close > sync && rename > close);
+});

@@ -1,6 +1,6 @@
 import { Page } from "playwright";
-import { waitForEnter } from "../io/prompt.js";
 import { FlowContext } from "./flowContext.js";
+import { CaptchaRequiredError } from "./captchaErrors.js";
 
 export async function isCaptchaVisible(page: Page): Promise<boolean> {
   const captchaSignals = [
@@ -21,12 +21,8 @@ export async function isCaptchaVisible(page: Page): Promise<boolean> {
   return false;
 }
 
-export async function pauseIfCaptcha(page: Page, context?: Pick<FlowContext, "manualIntervention">): Promise<void> {
+export async function pauseIfCaptcha(page: Page, _context?: Pick<FlowContext, "manualIntervention">): Promise<void> {
   if (await isCaptchaVisible(page)) {
-    if (context?.manualIntervention === false) {
-      throw new Error("ARCA esta solicitando captcha. Esta sesion no permite intervencion manual; reinicia en modo visible/guiado.");
-    }
-
-    await waitForEnter("ARCA esta solicitando captcha. Completalo manualmente en el navegador.");
+    throw new CaptchaRequiredError();
   }
 }

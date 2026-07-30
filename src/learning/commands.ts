@@ -6,6 +6,7 @@ export const learningCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("note"), text: z.string().min(1).max(2000) }),
   z.object({ type: z.literal("checkpoint"), name: z.string().min(1).max(120) }),
   z.object({ type: z.literal("status") }),
+  z.object({ type: z.literal("resume-authentication") }),
   z.object({ type: z.literal("inspect"), pageIndex: z.number().int().min(0).max(19).optional() }),
   z.object({ type: z.literal("click-exact"), inspectionId: z.string().uuid(), text: z.string().trim().min(1).max(300) }),
   z.object({ type: z.literal("select-exact"), inspectionId: z.string().uuid(), index: z.number().int().min(0).max(99), option: z.string().trim().min(1).max(300) }),
@@ -35,7 +36,7 @@ export function parseLearningCommandArgs(argv: string[], privateInputValue?: str
   const [operation, ...values] = argv;
   if (operation === "note") return learningCommandSchema.parse({ type: "note", text: values.join(" ") });
   if (operation === "checkpoint") return learningCommandSchema.parse({ type: "checkpoint", name: values.join(" ") });
-  if (["status", "finish", "abort"].includes(operation ?? "")) {
+  if (["status", "resume-authentication", "finish", "abort"].includes(operation ?? "")) {
     if (values.length) throw new Error(`El comando ${operation} no acepta argumentos.`);
     return learningCommandSchema.parse({ type: operation });
   }
@@ -56,7 +57,7 @@ export function parseLearningCommandArgs(argv: string[], privateInputValue?: str
     return learningCommandSchema.parse({ type: operation, inspectionId: values[0], index, value: privateInputValue });
   }
   if (operation === "press") return learningCommandSchema.parse({ type: operation, inspectionId: values[0], key: values[1] });
-  throw new Error("Uso: arca:learn:cmd -- note|checkpoint|status|inspect|click-exact|select-exact|fill-input|check-exact|press|finish|abort");
+  throw new Error("Uso: arca:learn:cmd -- note|checkpoint|status|resume-authentication|inspect|click-exact|select-exact|fill-input|check-exact|press|finish|abort");
 }
 
 export type HybridMutation = "click" | "select" | "fill" | "check" | "press";

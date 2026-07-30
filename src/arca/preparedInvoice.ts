@@ -21,6 +21,11 @@ export type PreparedInvoiceSummary = {
   recipientCommercialAddress?: string;
   saleCondition?: string;
   description: string;
+  quantity: string;
+  unitPrice: string;
+  subtotal: string;
+  total: string;
+  /** Alias conservado para consumidores anteriores; siempre coincide con total. */
   amount: string;
   rawContainsExpected: boolean;
   missingExpectedSignals: string[];

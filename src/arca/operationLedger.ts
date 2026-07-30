@@ -4,9 +4,16 @@ import fs from "node:fs/promises";
 import { getRuntimePaths } from "../config/runtimePaths.js";
 import { readJsonIfExists, writeJsonAtomic } from "../io/atomicJson.js";
 import { isProcessAlive } from "../io/processLock.js";
+import { acquireLocalOsMutex } from "../io/osMutex.js";
 
 export type OperationStatus = "prepared" | "emitting" | "emitted" | "failed_before_emit" | "unknown";
 const OPERATION_STATUSES = new Set<OperationStatus>(["prepared", "emitting", "emitted", "failed_before_emit", "unknown"]);
+
+type LedgerOwner = {
+  pid: number;
+  token: string;
+  claimedAt: string;
+};
 
 export type LedgerEntry = {
   operationId: string;
@@ -15,36 +22,91 @@ export type LedgerEntry = {
   jobHash: string;
   updatedAt: string;
   issuer?: { cuit: string; name: string };
+  owner?: LedgerOwner;
   receipt?: { voucherNumber?: string; cae?: string; pdfPath?: string; metadataPath?: string; pdfSha256?: string };
   detail?: string;
 };
 
 type Receipt = NonNullable<LedgerEntry["receipt"]>;
 
+export type OperationLedgerOptions = {
+  pid?: number;
+  ownerToken?: string;
+  isProcessAlive?: (pid: number) => boolean;
+  now?: () => Date;
+};
+
+const preparedOwnerMaximumAgeMs = 60 * 60 * 1000;
+const emittingOwnerMaximumAgeMs = 15 * 60 * 1000;
+
 export class OperationLedger {
-  constructor(private readonly directory = getRuntimePaths().ledger) {}
+  private readonly pid: number;
+  private readonly ownerToken: string;
+  private readonly processIsAlive: (pid: number) => boolean;
+  private readonly now: () => Date;
+
+  constructor(private readonly directory = getRuntimePaths().ledger, options: OperationLedgerOptions = {}) {
+    this.pid = options.pid ?? process.pid;
+    this.ownerToken = options.ownerToken ?? randomUUID();
+    this.processIsAlive = options.isProcessAlive ?? isProcessAlive;
+    this.now = options.now ?? (() => new Date());
+  }
 
   async get(operationId: string): Promise<LedgerEntry | undefined> {
-    return await this.readValidated(operationId);
+    return await this.withOperationLock(operationId, async () => {
+      const existing = await this.readValidated(operationId);
+      if (!existing || existing.status !== "emitting" || this.emittingOwnerIsActive(existing.owner)) return existing;
+      return await this.write({
+        operationId,
+        status: "unknown",
+        preparedInvoiceId: existing.preparedInvoiceId,
+        jobHash: existing.jobHash,
+        issuer: existing.issuer,
+        receipt: existing.receipt,
+        detail: "Se detectó una emisión huérfana después de finalizar su proceso propietario. Debe consultarse ARCA y reconciliarse; nunca se reintentará automáticamente.",
+      });
+    });
   }
 
   async claimPreparation(operationId: string, jobHash: string, preparedInvoiceId?: string): Promise<LedgerEntry> {
     return await this.withOperationLock(operationId, async () => {
       const existing = await this.readValidated(operationId);
       if (existing) {
-        if (existing.jobHash !== jobHash) {
-          throw new Error(`operationId=${operationId} ya está asociado a otro job; generá un operationId nuevo.`);
+        const reclaimablePrepared = existing.status === "prepared" && !this.preparedOwnerIsActive(existing.owner);
+        const revisableBeforeEmit = existing.status === "failed_before_emit" || reclaimablePrepared;
+        if (existing.status === "unknown" || existing.status === "emitting") {
+          throw new Error(`La operación ${operationId} está en estado ${existing.status}: está prohibido reintentar o crear otra intención para eludirla; consultá ARCA y reconciliá el resultado.`);
         }
-        if (existing.status !== "failed_before_emit") {
-          throw new Error(`La operación ${operationId} ya está en estado ${existing.status}; solo failed_before_emit permite un reintento controlado.`);
+        if (existing.status === "emitted") {
+          throw new Error(`La operación ${operationId} ya fue emitida. Esta intención no se reutiliza; solo una solicitud comercial humana realmente nueva puede iniciar otra factura.`);
+        }
+        if (existing.jobHash !== jobHash && !revisableBeforeEmit) {
+          throw new Error(`La operación ${operationId} conserva otra preparación activa; cerrala o reconstruí su misma revisión antes de cambiar el borrador.`);
+        }
+        if (existing.status !== "failed_before_emit" && !reclaimablePrepared) {
+          throw new Error(`La operación ${operationId} ya está en estado ${existing.status}; solo failed_before_emit o una preparación huérfana permiten reconstruirla.`);
         }
       }
-      return await this.write({ operationId, status: "prepared", preparedInvoiceId, jobHash });
+      return await this.write({ operationId, status: "prepared", preparedInvoiceId, jobHash, owner: this.currentOwner() });
     });
   }
 
   async claimEmission(operationId: string, preparedInvoiceId: string, jobHash: string): Promise<LedgerEntry> {
-    return await this.transition(operationId, preparedInvoiceId, jobHash, "prepared", "emitting");
+    return await this.withOperationLock(operationId, async () => {
+      const existing = await this.readValidated(operationId);
+      if (!this.matchesCurrentPreparation(existing, preparedInvoiceId, jobHash)) {
+        throw new Error(`La operación ${operationId} no puede pasar de ${existing?.status ?? "inexistente"} a emitting; la preparación vigente o su proceso propietario no coinciden.`);
+      }
+      if (!existing) throw new Error("La preparación desapareció durante la reserva de emisión.");
+      return await this.write({
+        operationId,
+        status: "emitting",
+        preparedInvoiceId,
+        jobHash,
+        issuer: existing.issuer,
+        owner: this.currentOwner(),
+      });
+    });
   }
 
   async attachPreparedIssuer(operationId: string, preparedInvoiceId: string, jobHash: string, issuer: NonNullable<LedgerEntry["issuer"]>): Promise<LedgerEntry> {
@@ -55,6 +117,9 @@ export class OperationLedger {
       const existing = await this.readValidated(operationId);
       if (!existing || existing.status !== "prepared" || existing.jobHash !== jobHash || existing.preparedInvoiceId !== preparedInvoiceId) {
         throw new Error(`La operación ${operationId} no admite asociar la identidad del emisor; la preparación vigente no coincide.`);
+      }
+      if (!this.ownerIsCurrent(existing.owner)) {
+        throw new Error(`La operación ${operationId} pertenece a otro proceso de preparación.`);
       }
       return await this.write({ ...existing, issuer: { cuit: issuer.cuit, name: issuer.name.trim() } });
     });
@@ -72,12 +137,17 @@ export class OperationLedger {
     return await this.transition(operationId, preparedInvoiceId, jobHash, "emitting", "unknown", { detail, receipt });
   }
 
+  async markFailedBeforeFirstClick(operationId: string, preparedInvoiceId: string, jobHash: string, detail: string): Promise<LedgerEntry> {
+    return await this.transition(operationId, preparedInvoiceId, jobHash, "emitting", "failed_before_emit", { detail });
+  }
+
   async markEmitted(operationId: string, preparedInvoiceId: string, jobHash: string, receipt: Receipt): Promise<LedgerEntry> {
+    assertCompleteReceipt(receipt);
     return await this.transition(operationId, preparedInvoiceId, jobHash, "emitting", "emitted", { receipt });
   }
 
   async reconcileUnknownAsEmitted(operationId: string, jobHash: string, receipt: Receipt): Promise<LedgerEntry> {
-    assertReconciliationReceipt(receipt);
+    assertCompleteReceipt(receipt);
     return await this.withOperationLock(operationId, async () => {
       const existing = await this.readValidated(operationId);
       if (!existing || existing.status !== "unknown" || existing.jobHash !== jobHash) {
@@ -94,10 +164,6 @@ export class OperationLedger {
     });
   }
 
-  async record(entry: Omit<LedgerEntry, "updatedAt">): Promise<LedgerEntry> {
-    return await this.withOperationLock(entry.operationId, async () => await this.write(entry));
-  }
-
   private async transition(
     operationId: string,
     preparedInvoiceId: string,
@@ -108,7 +174,8 @@ export class OperationLedger {
   ): Promise<LedgerEntry> {
     return await this.withOperationLock(operationId, async () => {
       const existing = await this.readValidated(operationId);
-      if (!existing || existing.status !== expected || existing.jobHash !== jobHash || existing.preparedInvoiceId !== preparedInvoiceId) {
+      const ownerMatches = (expected !== "prepared" && expected !== "emitting") || this.ownerIsCurrent(existing?.owner);
+      if (!existing || existing.status !== expected || existing.jobHash !== jobHash || existing.preparedInvoiceId !== preparedInvoiceId || !ownerMatches) {
         throw new Error(`La operación ${operationId} no puede pasar de ${existing?.status ?? "inexistente"} a ${status}; la preparación vigente no coincide.`);
       }
       return await this.write({ operationId, status, preparedInvoiceId, jobHash, issuer: existing.issuer, ...extra });
@@ -116,7 +183,7 @@ export class OperationLedger {
   }
 
   private async write(entry: Omit<LedgerEntry, "updatedAt">): Promise<LedgerEntry> {
-    const complete: LedgerEntry = { ...entry, updatedAt: new Date().toISOString() };
+    const complete: LedgerEntry = { ...entry, updatedAt: this.now().toISOString() };
     await writeJsonAtomic(this.pathFor(entry.operationId), complete);
     return complete;
   }
@@ -142,32 +209,49 @@ export class OperationLedger {
     }
   }
 
+  private currentOwner(): LedgerOwner {
+    return { pid: this.pid, token: this.ownerToken, claimedAt: this.now().toISOString() };
+  }
+
+  private ownerIsCurrent(owner: LedgerOwner | undefined): boolean {
+    return isValidOwner(owner) && owner.pid === this.pid && owner.token === this.ownerToken;
+  }
+
+  private ownerProcessIsActive(owner: LedgerOwner | undefined): boolean {
+    return isValidOwner(owner) && (this.ownerIsCurrent(owner) || this.processIsAlive(owner.pid));
+  }
+
+  private preparedOwnerIsActive(owner: LedgerOwner | undefined): boolean {
+    return this.ownerProcessIsActive(owner) && this.ownerAgeIsWithin(owner!, preparedOwnerMaximumAgeMs);
+  }
+
+  private emittingOwnerIsActive(owner: LedgerOwner | undefined): boolean {
+    return this.ownerProcessIsActive(owner) && this.ownerAgeIsWithin(owner!, emittingOwnerMaximumAgeMs);
+  }
+
+  private ownerAgeIsWithin(owner: LedgerOwner, maximumAgeMs: number): boolean {
+    const age = this.now().valueOf() - Date.parse(owner.claimedAt);
+    return Number.isFinite(age) && age >= -60_000 && age < maximumAgeMs;
+  }
+
+  private matchesCurrentPreparation(existing: LedgerEntry | undefined, preparedInvoiceId: string, jobHash: string): boolean {
+    return Boolean(existing
+      && existing.status === "prepared"
+      && existing.jobHash === jobHash
+      && existing.preparedInvoiceId === preparedInvoiceId
+      && this.ownerIsCurrent(existing.owner));
+  }
+
   private async withOperationLock<T>(operationId: string, action: () => Promise<T>): Promise<T> {
     await fs.mkdir(this.directory, { recursive: true });
-    const lockPath = `${this.pathFor(operationId)}.lock`;
-    const ownerToken = randomUUID();
-    let handle: fs.FileHandle;
-    try {
-      handle = await fs.open(lockPath, "wx");
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-      const lock = await readJsonIfExists<{ pid?: number }>(lockPath).catch(() => undefined);
-      if (lock?.pid && isProcessAlive(lock.pid)) throw new Error(`La operación ${operationId} está siendo modificada por otro proceso.`);
-      throw new Error(`La operación ${operationId} tiene un lock huérfano. No se elimina automáticamente; requiere revisión manual.`);
-    }
-    try {
-      await handle.writeFile(JSON.stringify({ pid: process.pid, ownerToken, operationId }));
-    } catch (error) {
-      await handle.close().catch(() => undefined);
-      await fs.rm(lockPath, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    const release = await acquireLocalOsMutex(
+      `operation-ledger\0${path.resolve(this.directory)}\0${operationId}`,
+      `la operación ${operationId}`,
+    );
     try {
       return await action();
     } finally {
-      await handle.close().catch(() => undefined);
-      const current = await readJsonIfExists<{ ownerToken?: string }>(lockPath).catch(() => undefined);
-      if (current?.ownerToken === ownerToken) await fs.rm(lockPath, { force: true }).catch(() => undefined);
+      await release();
     }
   }
 
@@ -182,10 +266,18 @@ export class OperationLedger {
   }
 }
 
-function assertReconciliationReceipt(receipt: Receipt): void {
-  if (!/^\d{5}-\d{8}$/.test(receipt.voucherNumber ?? "")) throw new Error("La reconciliación exige un número de comprobante verificable.");
-  if (!/^\d{14}$/.test(receipt.cae ?? "")) throw new Error("La reconciliación exige un CAE verificable.");
-  if (!receipt.pdfPath || !path.isAbsolute(receipt.pdfPath)) throw new Error("La reconciliación exige una ruta PDF absoluta.");
-  if (!receipt.metadataPath || !path.isAbsolute(receipt.metadataPath)) throw new Error("La reconciliación exige una ruta de metadatos absoluta.");
-  if (!/^[a-f0-9]{64}$/i.test(receipt.pdfSha256 ?? "")) throw new Error("La reconciliación exige un hash SHA-256 verificable.");
+function assertCompleteReceipt(receipt: Receipt): void {
+  if (!/^\d{5}-\d{8}$/.test(receipt.voucherNumber ?? "")) throw new Error("El estado emitted exige un número de comprobante verificable.");
+  if (!/^\d{14}$/.test(receipt.cae ?? "")) throw new Error("El estado emitted exige un CAE verificable.");
+  if (!receipt.pdfPath || !path.isAbsolute(receipt.pdfPath)) throw new Error("El estado emitted exige una ruta PDF absoluta.");
+  if (!receipt.metadataPath || !path.isAbsolute(receipt.metadataPath)) throw new Error("El estado emitted exige una ruta de metadatos absoluta.");
+  if (!/^[a-f0-9]{64}$/i.test(receipt.pdfSha256 ?? "")) throw new Error("El estado emitted exige un hash SHA-256 verificable.");
+}
+
+function isValidOwner(owner: LedgerOwner | undefined): owner is LedgerOwner {
+  return Boolean(owner
+    && Number.isSafeInteger(owner.pid)
+    && owner.pid > 0
+    && /^[a-f0-9-]{16,128}$/iu.test(owner.token)
+    && Number.isFinite(Date.parse(owner.claimedAt)));
 }

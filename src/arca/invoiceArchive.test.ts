@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { ResolvedInvoiceJob } from "../types.js";
 import { makeCanonicalTemporaryDirectory } from "../testing/temporaryDirectory.js";
-import { buildInvoiceArtifactPaths, buildInvoiceStagingPdfPath, publishInvoiceArtifacts } from "./invoiceArchive.js";
+import { buildInvoiceArtifactPaths, buildInvoiceStagingPdfPath, publishInvoiceArtifactsForJob } from "./invoiceArchive.js";
 
 function invoiceJob(outputDir: string, voucherType = "Factura C"): ResolvedInvoiceJob {
   return {
@@ -61,6 +61,7 @@ test("reutiliza la única carpeta del CUIT aunque cambie la etiqueta y bloquea d
     pdfSha256: "a".repeat(64),
   }, "job-hash");
   assert.match(artifacts.pdfPath, /20-00000000-1 - ETIQUETA ANTERIOR/u);
+  assert.equal(path.basename(artifacts.pdfPath), "ETIQUETA ANTERIOR - FC-C - 00001-00000042.pdf");
 
   await fs.mkdir(path.join(issuersRoot, "20-00000000-1 - OTRA ETIQUETA"));
   await assert.rejects(() => buildInvoiceArtifactPaths(invoiceJob(root), issuer, {
@@ -99,32 +100,52 @@ test("publica PDF y metadatos sin sobrescribir y admite repetición con el mismo
   const bytes = Buffer.from("%PDF-archivo-ficticio", "utf8");
   const pdfSha256 = createHash("sha256").update(bytes).digest("hex");
   const job = invoiceJob(root);
-  const artifacts = await buildInvoiceArtifactPaths(job, issuer, {
+  const evidence = {
     voucherNumber: "00001-00000042",
     cae,
     pdfSha256,
-  }, "job-hash", "2030-06-15T12:00:00.000Z");
+  };
+  const artifacts = await buildInvoiceArtifactPaths(job, issuer, evidence, "job-hash", "2030-06-15T12:00:00.000Z");
 
   const staging = buildInvoiceStagingPdfPath(job.operationId, root);
   await fs.mkdir(path.dirname(staging), { recursive: true });
   await fs.writeFile(staging, bytes, { flag: "wx" });
-  const first = await publishInvoiceArtifacts(staging, artifacts, root, root);
+  const first = await publishInvoiceArtifactsForJob(staging, job, issuer, evidence, "job-hash", root, root, "2030-06-15T12:00:00.000Z");
   assert.equal(first.pdfPath, artifacts.pdfPath);
+  assert.equal(first.pdfSha256, pdfSha256);
   assert.equal(JSON.parse(await fs.readFile(first.metadataPath, "utf8")).pdfSha256, pdfSha256);
   await assert.rejects(() => fs.access(staging));
 
   await fs.writeFile(staging, bytes, { flag: "wx" });
-  assert.deepEqual(await publishInvoiceArtifacts(staging, artifacts, root, root), first);
+  assert.deepEqual(await publishInvoiceArtifactsForJob(staging, job, issuer, evidence, "job-hash", root, root, "2030-06-15T12:00:00.000Z"), first);
 
   const changed = Buffer.from("%PDF-contenido-distinto", "utf8");
   const changedHash = createHash("sha256").update(changed).digest("hex");
-  const conflicting = await buildInvoiceArtifactPaths(job, issuer, {
+  const conflictingEvidence = {
     voucherNumber: "00001-00000042",
     cae,
     pdfSha256: changedHash,
-  }, "job-hash");
+  };
   await fs.writeFile(staging, changed, { flag: "wx" });
-  await assert.rejects(() => publishInvoiceArtifacts(staging, conflicting, root, root), /hash es diferente/i);
+  await assert.rejects(
+    () => publishInvoiceArtifactsForJob(staging, job, issuer, conflictingEvidence, "job-hash", root, root),
+    /hash es diferente/i,
+  );
+});
+
+test("el nombre completo del emisor queda en metadata aunque la ruta use una etiqueta truncada", async (t) => {
+  const root = await makeCanonicalTemporaryDirectory("arca-invoice-archive-long-issuer-");
+  t.after(async () => await fs.rm(root, { recursive: true, force: true }));
+  const longName = "EMISOR FICTICIO CON UNA RAZÓN SOCIAL EXTENSA PARA PROBAR METADATOS COMPLETOS";
+  const artifacts = await buildInvoiceArtifactPaths(invoiceJob(root), { ...issuer, name: longName }, {
+    voucherNumber: "00001-00000042",
+    cae,
+    pdfSha256: "a".repeat(64),
+  }, "job-hash");
+
+  assert.equal(artifacts.metadata.issuer.name, longName);
+  assert.equal(path.basename(artifacts.pdfPath).includes(longName), false);
+  assert.ok(Array.from(path.basename(artifacts.pdfPath).split(" - FC-C")[0] ?? "").length <= 48);
 });
 
 test("rechaza números cuyo punto de venta no coincide con el job", async (t) => {
@@ -135,4 +156,74 @@ test("rechaza números cuyo punto de venta no coincide con el job", async (t) =>
     cae,
     pdfSha256: "a".repeat(64),
   }, "job-hash"), /punto de venta/i);
+});
+
+test("rechaza un PDF canónico preexistente que también es visible fuera del runtime", async (t) => {
+  const root = await makeCanonicalTemporaryDirectory("arca-invoice-archive-hardlink-");
+  const outside = await makeCanonicalTemporaryDirectory("arca-invoice-archive-hardlink-outside-");
+  t.after(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+  const bytes = Buffer.from("%PDF-hardlink-ficticio", "utf8");
+  const pdfSha256 = createHash("sha256").update(bytes).digest("hex");
+  const job = invoiceJob(root);
+  const evidence = {
+    voucherNumber: "00001-00000042",
+    cae,
+    pdfSha256,
+  };
+  const artifacts = await buildInvoiceArtifactPaths(job, issuer, evidence, "job-hash");
+  await fs.mkdir(path.dirname(artifacts.pdfPath), { recursive: true });
+  const externalFile = path.join(outside, "factura-externa.pdf");
+  await fs.writeFile(externalFile, bytes);
+  await fs.link(externalFile, artifacts.pdfPath);
+  const staging = buildInvoiceStagingPdfPath(job.operationId, root);
+  await fs.mkdir(path.dirname(staging), { recursive: true });
+  await fs.writeFile(staging, bytes);
+
+  await assert.rejects(
+    () => publishInvoiceArtifactsForJob(staging, job, issuer, evidence, "job-hash", root, root),
+    /hard links/i,
+  );
+  assert.equal(await fs.readFile(externalFile, "utf8"), bytes.toString("utf8"));
+});
+
+test("dos publicaciones concurrentes del mismo CUIT reutilizan una sola carpeta canónica", async (t) => {
+  const root = await makeCanonicalTemporaryDirectory("arca-invoice-archive-concurrent-");
+  t.after(async () => await fs.rm(root, { recursive: true, force: true }));
+  const jobA = { ...invoiceJob(root), operationId: "archive-concurrent-operation-a" };
+  const jobB = { ...invoiceJob(root), operationId: "archive-concurrent-operation-b" };
+  const bytesA = Buffer.from("%PDF-concurrente-a", "utf8");
+  const bytesB = Buffer.from("%PDF-concurrente-b", "utf8");
+  const evidenceA = {
+    voucherNumber: ["00001", "00000051"].join("-"),
+    cae,
+    pdfSha256: createHash("sha256").update(bytesA).digest("hex"),
+  };
+  const evidenceB = {
+    voucherNumber: ["00001", "00000052"].join("-"),
+    cae,
+    pdfSha256: createHash("sha256").update(bytesB).digest("hex"),
+  };
+  const stagingA = buildInvoiceStagingPdfPath(jobA.operationId, root);
+  const stagingB = buildInvoiceStagingPdfPath(jobB.operationId, root);
+  await fs.mkdir(path.dirname(stagingA), { recursive: true });
+  await Promise.all([
+    fs.writeFile(stagingA, bytesA, { flag: "wx" }),
+    fs.writeFile(stagingB, bytesB, { flag: "wx" }),
+  ]);
+
+  const [publishedA, publishedB] = await Promise.all([
+    publishInvoiceArtifactsForJob(stagingA, jobA, { ...issuer, name: "ETIQUETA CONCURRENTE A" }, evidenceA, "job-hash-a", root, root),
+    publishInvoiceArtifactsForJob(stagingB, jobB, { ...issuer, name: "ETIQUETA CONCURRENTE B" }, evidenceB, "job-hash-b", root, root),
+  ]);
+
+  const issuerDirectories = await fs.readdir(path.join(root, "Emisores"), { withFileTypes: true });
+  assert.equal(issuerDirectories.length, 1);
+  assert.equal(issuerDirectories[0]?.isDirectory(), true);
+  const canonicalDirectory = issuerDirectories[0]?.name ?? "";
+  assert.ok(publishedA.pdfPath.includes(canonicalDirectory));
+  assert.ok(publishedB.pdfPath.includes(canonicalDirectory));
+  assert.notEqual(publishedA.pdfPath, publishedB.pdfPath);
 });

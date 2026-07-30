@@ -86,6 +86,8 @@ export async function continueArcaAccessIfRequested(page: Page, credentials: Arc
   await waitForPageSettled(page);
   await pauseIfCaptcha(page, context);
   assertOfficialArcaAuthUrl(page.url(), "la continuación del acceso fiscal");
+  await assertCredentialsWereNotRejected(page);
+  let recognizedAuthenticationStage = false;
 
   const cuitField = page.getByLabel(/cuit|cuil|clave unica/i)
     .or(page.getByPlaceholder(/cuit|cuil/i))
@@ -94,7 +96,9 @@ export async function continueArcaAccessIfRequested(page: Page, credentials: Arc
     .or(page.locator("input[autocomplete='username']"));
 
   if (await cuitField.first().isVisible().catch(() => false)) {
+    recognizedAuthenticationStage = true;
     console.log("Confirmando CUIT...");
+    await assertCredentialsWereNotRejected(page);
     assertOfficialArcaAuthUrl(page.url(), "el ingreso del CUIT");
     await fillFirstVisible([
       candidate(page.getByLabel(/cuit|cuil|clave unica/i), "campo por label CUIT/CUIL"),
@@ -107,6 +111,7 @@ export async function continueArcaAccessIfRequested(page: Page, credentials: Arc
     ], credentials.cuit, "CUIT", context);
 
     assertOfficialArcaAuthUrl(page.url(), "el envío del CUIT");
+    await assertCredentialsWereNotRejected(page);
     await clickFirstVisible([
       candidate(page.getByRole("button", { name: /siguiente|continuar|ingresar/i }), "boton siguiente/continuar/ingresar"),
       candidate(page.locator("input[type='submit']"), "input submit"),
@@ -121,7 +126,9 @@ export async function continueArcaAccessIfRequested(page: Page, credentials: Arc
     .or(page.locator("input[type='password']"));
 
   if (await passwordField.first().isVisible().catch(() => false)) {
+    recognizedAuthenticationStage = true;
     console.log("Confirmando clave fiscal...");
+    await assertCredentialsWereNotRejected(page);
     assertOfficialArcaAuthUrl(page.url(), "el ingreso de la clave fiscal");
     await fillFirstVisible([
       candidate(page.getByLabel(/clave/i), "campo por label clave"),
@@ -134,8 +141,13 @@ export async function continueArcaAccessIfRequested(page: Page, credentials: Arc
     .or(page.locator("input[type='submit']"))
     .or(page.locator("button[type='submit']"));
 
+  if (!recognizedAuthenticationStage) {
+    throw new Error("ARCA mostró una pantalla de autenticación inesperada. No se envió ningún formulario.");
+  }
+
   if (await submitButton.first().isVisible().catch(() => false)) {
     assertOfficialArcaAuthUrl(page.url(), "el envío del formulario de autenticación");
+    await assertCredentialsWereNotRejected(page);
     await clickFirstVisible([
       candidate(page.getByRole("button", { name: /ingresar|continuar|siguiente|aceptar/i }), "boton ingresar/continuar/siguiente/aceptar"),
       candidate(page.locator("input[type='submit']"), "input submit"),
@@ -144,6 +156,11 @@ export async function continueArcaAccessIfRequested(page: Page, credentials: Arc
     await waitForPageSettled(page);
     await waitForLoginOutcome(page, "auth-exit", context);
   }
+}
+
+async function assertCredentialsWereNotRejected(page: Page): Promise<void> {
+  const rejected = await page.getByText(/clave\s+o\s+usuario\s+incorrecto/i, { exact: false }).first().isVisible().catch(() => false);
+  if (rejected) throw new InvalidArcaCredentialsError();
 }
 
 async function waitForLoginOutcome(page: Page, expected: LoginExpectedOutcome, context?: FlowContext): Promise<void> {

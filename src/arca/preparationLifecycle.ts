@@ -13,12 +13,13 @@ export async function invalidatePreparationBeforeMutation(
   ledger: PreparationLedgerTransitions,
   currentPageFingerprint: () => Promise<string>,
   detail: string,
+  options: { recognizedPreClickInterruption?: boolean } = {},
 ): Promise<PreparedInvoiceState | undefined> {
   const state = store.invalidate();
   if (!state) return undefined;
 
   const currentFingerprint = await currentPageFingerprint().catch(() => "");
-  if (currentFingerprint !== state.pageFingerprint) {
+  if (!options.recognizedPreClickInterruption && currentFingerprint !== state.pageFingerprint) {
     await ledger.markPreparedUnknown(state.operationId, state.preparedInvoiceId, state.jobHash, detail);
   } else {
     await ledger.markFailedBeforeEmit(state.operationId, state.preparedInvoiceId, state.jobHash, detail);

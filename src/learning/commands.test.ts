@@ -5,6 +5,8 @@ import { assertLearningCommandSafe, isHybridMutationAllowed, parseLearningComman
 const inspectionId = "00000000-0000-4000-8000-000000000001";
 
 test("los comandos híbridos usan coincidencias exactas e índices explícitos", () => {
+  assert.deepEqual(parseLearningCommandArgs(["resume-authentication"]), { type: "resume-authentication" });
+  assert.throws(() => parseLearningCommandArgs(["resume-authentication", "otra-cosa"]), /no acepta argumentos/);
   assert.deepEqual(parseLearningCommandArgs(["inspect"]), { type: "inspect", pageIndex: undefined });
   assert.deepEqual(parseLearningCommandArgs(["inspect", "1"]), { type: "inspect", pageIndex: 1 });
   assert.deepEqual(parseLearningCommandArgs(["click-exact", inspectionId, "Continuar"]), { type: "click-exact", inspectionId, text: "Continuar" });

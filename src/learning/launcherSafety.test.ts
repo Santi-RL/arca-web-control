@@ -22,5 +22,33 @@ test("el worker instala el cierre controlado antes de abrir Chrome", async () =>
   assert.ok(signalHandler >= 0 && browserLaunch >= 0 && signalHandler < browserLaunch);
   assert.match(source, /process\.on\("message"/);
   assert.match(source, /context = await chromium\.launchPersistentContext[\s\S]*?assertStartupActive\(\)/);
-  assert.match(source, /terminalAccepted = true[\s\S]*?if \(terminalAccepted\) requestStop\(\)/);
+  assert.match(source, /terminalAccepted = true[\s\S]*?if \(terminalAccepted \|\| error instanceof InvalidArcaCredentialsError\) requestStop\(\)/);
+  assert.match(source, /loginToArca\([\s\S]*?manualIntervention:\s*false/);
+  assert.doesNotMatch(source, /manualIntervention:\s*true/);
+});
+
+test("un captcha de login publica la pausa y conserva el worker visible", async () => {
+  const worker = await fs.readFile(path.resolve("scripts", "arca-learn.mts"), "utf8");
+  const serverListen = worker.indexOf('server?.listen(0, "127.0.0.1"');
+  const login = worker.indexOf("await loginToArca(", serverListen);
+  const captchaCatch = worker.indexOf("if (!isCaptchaRequiredError(error)) throw error", login);
+  const publishPause = worker.indexOf('await publishState("captcha")', captchaCatch);
+  const waitForExplicitCommand = worker.indexOf("await stopped", publishPause);
+  assert.ok(serverListen >= 0 && login > serverListen && captchaCatch > login && publishPause > captchaCatch && waitForExplicitCommand > publishPause);
+  assert.match(worker, /new AuthenticationAttemptGate\(\)/);
+  assert.match(worker, /resumeLearningAuthentication\(/);
+  assert.match(worker, /error instanceof InvalidArcaCredentialsError[\s\S]*?requestStop\(\)/);
+
+  const launcher = await fs.readFile(path.resolve("scripts", "arca-learn-start.mts"), "utf8");
+  assert.match(launcher, /child\.unref\(\)[\s\S]*?startupReadyState === "captcha"/);
+  assert.match(launcher, /CAPTCHA_VISIBLE=true/);
+  assert.match(launcher, /process\.exitCode = 2/);
+});
+
+test("las mutaciones de aprendizaje exigen el marcador y conservan status/abort para cierre", async () => {
+  const source = await fs.readFile(path.resolve("scripts", "arca-learn-cmd.mts"), "utf8");
+  assert.match(source, /commandArgs\[0\] !== "status" && commandArgs\[0\] !== "abort"/);
+  const gate = source.indexOf("await useActiveSessionRuntimeLayout(runtime)");
+  const endpoint = source.indexOf("buildLearningControlUrl(current)", gate);
+  assert.ok(gate >= 0 && endpoint > gate);
 });

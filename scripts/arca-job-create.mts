@@ -2,6 +2,7 @@ import { createPrivateInvoiceJob } from "../src/jobs/privateIntake.js";
 import { resolveCredentialRoutingIdentity } from "../src/config/env.js";
 import { ensureRuntimeLayout, getRuntimePaths } from "../src/config/runtimePaths.js";
 import { sanitizeErrorMessage } from "../src/arca/publicErrors.js";
+import { normalizeConversationalInvoiceInput } from "../src/jobs/chatIntake.js";
 
 const maximumInputBytes = 64 * 1024;
 
@@ -14,7 +15,7 @@ try {
     throw new Error("La entrada privada no contiene un JSON válido.");
   }
   const runtime = await ensureRuntimeLayout(getRuntimePaths());
-  const created = await createPrivateInvoiceJob(input, {
+  const created = await createPrivateInvoiceJob(normalizeConversationalInvoiceInput(input), {
     privateJobsRoot: runtime.privateJobs,
     trustedRuntimeRoot: runtime.root,
     resolveIssuer: resolveCredentialRoutingIdentity,

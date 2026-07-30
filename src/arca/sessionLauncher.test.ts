@@ -21,6 +21,7 @@ import {
   sessionShutdownMessage,
   notifySessionPublished,
   retrySessionStatus,
+  sessionStatusPayloadFromHttp,
   waitForSessionPublished,
   waitForSessionRuntimeAclVerification,
 } from "./sessionLauncher.js";
@@ -99,6 +100,12 @@ test("el estado local se reintenta dentro de un plazo acotado", async () => {
   assert.equal(await retrySessionStatus(async () => undefined, 10, 2), undefined);
   assert.ok(Date.now() - startedAt < 100);
   await assert.rejects(() => retrySessionStatus(async () => undefined, 0), /tiempos de sondeo/i);
+});
+
+test("un 409 busy prueba que la sesión sigue viva y no es un estado huérfano", () => {
+  assert.deepEqual(sessionStatusPayloadFromHttp(409, { ok: false, status: "busy" }), { ok: false, status: "busy", busy: true });
+  assert.equal(sessionStatusPayloadFromHttp(500, { status: "error" }), undefined);
+  assert.deepEqual(sessionStatusPayloadFromHttp(200, { status: "ok" }), { status: "ok" });
 });
 
 test("la atestación IPC de ACL valida raíz, forma exacta y nonce", () => {

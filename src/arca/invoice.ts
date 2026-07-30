@@ -129,7 +129,7 @@ export async function fillInvoice(page: Page, job: ResolvedInvoiceJob, context?:
   console.log("Completando detalle e importe...");
   await measureArcaPerformance("prepare_operation_detail", async () => {
     const amount = formatArcaUnitPrice(job.amount);
-    await fillOperationDetail(page, job.description, amount, job.amountCents, job.unit, context);
+    Object.assign(evidence, await fillOperationDetail(page, job.description, amount, job.amountCents, job.unit, context));
     Object.assign(evidence, await captureDetailEvidence(page, job));
 
   await context?.guided?.checkpoint(page, {
@@ -212,7 +212,7 @@ async function fillRecipientData(page: Page, job: ResolvedInvoiceJob, context?: 
   await checkSaleCondition(page, job.saleCondition, context);
 }
 
-async function fillOperationDetail(page: Page, description: string, unitPrice: string, amountCents: number, unit: string | undefined, context?: FlowContext): Promise<void> {
+async function fillOperationDetail(page: Page, description: string, unitPrice: string, amountCents: number, unit: string | undefined, context?: FlowContext): Promise<InvoiceControlEvidence> {
   assertOfficialArcaRcelUrl(page.url(), "la carga del detalle y el importe");
   await fillFirstVisible([
     candidate(page.locator("#detalle_descripcion1"), "#detalle_descripcion1"),
@@ -234,10 +234,10 @@ async function fillOperationDetail(page: Page, description: string, unitPrice: s
     candidate(page.getByRole("textbox", { name: /precio.*unit/i }), "textbox accesible precio unitario"),
   ], unitPrice, "precio unitario", context);
   await page.keyboard.press("Tab").catch(() => undefined);
-  await measureArcaPerformance("prepare_total_ready", async () => await waitForCalculatedInvoiceTotal(page, amountCents));
+  return await measureArcaPerformance("prepare_total_ready", async () => await waitForCalculatedInvoiceTotal(page, amountCents));
 }
 
-export async function waitForCalculatedInvoiceTotal(page: Page, expectedCents: number, timeoutMs = 5000): Promise<void> {
+export async function waitForCalculatedInvoiceTotal(page: Page, expectedCents: number, timeoutMs = 5000): Promise<Pick<InvoiceControlEvidence, "subtotal" | "total">> {
   assertOfficialArcaRcelUrl(page.url(), "la lectura del total calculado");
   if (!Number.isSafeInteger(expectedCents) || expectedCents < 0) throw new Error("El total esperado en centavos es inválido.");
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("El tiempo de espera del total calculado es inválido.");
@@ -255,7 +255,9 @@ export async function waitForCalculatedInvoiceTotal(page: Page, expectedCents: n
   while (Date.now() < deadline) {
     assertOfficialArcaRcelUrl(page.url(), "la lectura del total calculado");
     const [subtotalValue, totalValue] = await Promise.all([subtotal.inputValue(), total.inputValue()]);
-    if (parseArcaCalculatedAmount(subtotalValue) === expectedCents && parseArcaCalculatedAmount(totalValue) === expectedCents) return;
+    if (parseArcaCalculatedAmount(subtotalValue) === expectedCents && parseArcaCalculatedAmount(totalValue) === expectedCents) {
+      return { subtotal: subtotalValue.trim(), total: totalValue.trim() };
+    }
     await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
   }
 

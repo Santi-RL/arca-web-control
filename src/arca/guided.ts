@@ -25,7 +25,7 @@ export class GuidedSession {
 
   private constructor(private readonly artifactDir: string) {}
 
-  static async create(baseDir = path.join(getRuntimePaths().root, "guided")): Promise<GuidedSession> {
+  static async create(baseDir = getRuntimePaths().guided): Promise<GuidedSession> {
     const artifactDir = path.join(baseDir, timestampForPath());
     await fs.mkdir(artifactDir, { recursive: true });
     console.log(`Modo guiado activo. Artefactos: ${artifactDir}`);

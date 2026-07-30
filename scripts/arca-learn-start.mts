@@ -4,14 +4,19 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import { ensureRuntimeLayout } from "../src/config/runtimePaths.js";
+import { ensureRuntimeLayout, getRuntimePaths } from "../src/config/runtimePaths.js";
+import { acquireRuntimeMaintenanceTransition } from "../src/config/runtimeMaintenance.js";
 import { isProcessAlive } from "../src/io/processLock.js";
 import { invalidCredentialsErrorFromLog, startupErrorFromLog } from "../src/arca/loginErrors.js";
+import { CaptchaRequiredError } from "../src/arca/captchaErrors.js";
 import { buildLearningWorkerArgs, learningShutdownMessage } from "../src/learning/launcher.js";
 import { readCurrentLearningStateIfExists } from "../src/learning/sessionState.js";
 
+const runtimeCandidate = getRuntimePaths();
+const releaseRuntimeTransition = await acquireRuntimeMaintenanceTransition(runtimeCandidate);
+try {
 const values = process.argv.slice(2);
-const runtime = await ensureRuntimeLayout();
+const runtime = await ensureRuntimeLayout(runtimeCandidate);
 const currentPath = path.join(runtime.learning, "current.json");
 const launchId = randomUUID();
 const existing = await readCurrentLearningStateIfExists(currentPath);
@@ -29,23 +34,37 @@ const child = spawn(process.execPath, buildLearningWorkerArgs(path.resolve("scri
 try {
   const deadline = Date.now() + 300000;
   let ready = false;
+  let startupReadyState: "captcha" | "learning" | undefined;
   while (Date.now() < deadline) {
     const current = await readCurrentLearningStateIfExists(currentPath).catch(() => undefined);
-    if (child.pid !== undefined && current?.launchId === launchId && current.pid === child.pid && isProcessAlive(current.pid)) { ready = true; break; }
+    if (child.pid !== undefined && current?.launchId === launchId && current.pid === child.pid && isProcessAlive(current.pid)) {
+      ready = true;
+      startupReadyState = current.readyState;
+      break;
+    }
     if (child.exitCode !== null) throw await workerExitError();
     await delay(500);
   }
   if (!ready) {
     const finalCurrent = await readCurrentLearningStateIfExists(currentPath).catch(() => undefined);
-    if (child.pid !== undefined && finalCurrent?.launchId === launchId && finalCurrent.pid === child.pid && isProcessAlive(finalCurrent.pid)) ready = true;
+    if (child.pid !== undefined && finalCurrent?.launchId === launchId && finalCurrent.pid === child.pid && isProcessAlive(finalCurrent.pid)) {
+      ready = true;
+      startupReadyState = finalCurrent.readyState;
+    }
     else if (child.exitCode !== null) throw await workerExitError();
   }
   if (ready) {
     if (child.connected) child.disconnect();
     child.unref();
-    console.log("READY_STATE=learning");
+    console.log(`READY_STATE=${startupReadyState ?? "learning"}`);
     console.log(`LEARNING_FILE=${currentPath}`);
-    process.exitCode = 0;
+    if (startupReadyState === "captcha") {
+      console.log("CAPTCHA_VISIBLE=true");
+      console.error(new CaptchaRequiredError().message);
+      process.exitCode = 2;
+    } else {
+      process.exitCode = 0;
+    }
   } else {
     if (child.exitCode === null && child.connected) child.send(learningShutdownMessage);
     await Promise.race([new Promise<void>((resolve) => child.once("exit", () => resolve())), delay(5000)]);
@@ -66,4 +85,7 @@ async function workerExitError(): Promise<Error> {
 
 async function readWorkerLog(): Promise<string> {
   return fs.readFile(stderrPath, "utf8").then((value) => value.slice(-32_768)).catch(() => "");
+}
+} finally {
+  await releaseRuntimeTransition();
 }

@@ -46,6 +46,10 @@ const baseSummary: PreparedInvoiceSummary = {
   recipientCuit: "20000000001",
   saleCondition: "Otra",
   description: "Servicio ficticio",
+  quantity: "1",
+  unitPrice: "100,00",
+  subtotal: "100,00",
+  total: "100,00",
   amount: "100,00",
   rawContainsExpected: true,
   missingExpectedSignals: [],
@@ -117,6 +121,25 @@ test("si la página cambió, la preparación retirada queda unknown y no admite 
     () => ledger.claimPreparation(oldState.operationId, oldState.jobHash, "prepared-next"),
     /estado unknown/,
   );
+});
+
+test("una interrupción de autenticación reconocida antes de emitir permite reconstruir", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "arca-prepare-lifecycle-"));
+  const ledger = new OperationLedger(directory);
+  const store = new PreparedInvoiceStore();
+  const oldState = createState(store, baseJob, "prepared-old");
+  await ledger.claimPreparation(oldState.operationId, oldState.jobHash, oldState.preparedInvoiceId);
+
+  await invalidatePreparationBeforeMutation(
+    store,
+    ledger,
+    async () => "auth-page-not-summary",
+    "La sesión expiró antes de emitir.",
+    { recognizedPreClickInterruption: true },
+  );
+
+  assert.equal((await ledger.get(oldState.operationId))?.status, "failed_before_emit");
+  await ledger.claimPreparation(oldState.operationId, oldState.jobHash, "prepared-rebuilt");
 });
 
 test("un fallo al persistir la invalidación retira el ID anterior y bloquea la mutación", async () => {

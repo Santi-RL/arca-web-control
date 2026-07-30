@@ -6,7 +6,13 @@ import { chromium } from "playwright";
 import { loadCredentials, loadRuntimeConfig } from "../src/config/env.js";
 import { ensureRuntimeLayout } from "../src/config/runtimePaths.js";
 import { readJsonIfExists } from "../src/io/atomicJson.js";
-import { loginToArca } from "../src/arca/login.js";
+import { continueArcaAccessIfRequested, loginToArca } from "../src/arca/login.js";
+import { isCaptchaVisible } from "../src/arca/captcha.js";
+import { CaptchaRequiredError, isCaptchaRequiredError } from "../src/arca/captchaErrors.js";
+import { AuthenticationAttemptGate } from "../src/arca/authenticationAttemptGate.js";
+import { InvalidArcaCredentialsError } from "../src/arca/loginErrors.js";
+import { isOfficialArcaPortalUrl } from "../src/arca/officialUrls.js";
+import { SessionCommandGate } from "../src/arca/sessionCommandGate.js";
 import { LearningRecorder } from "../src/learning/recorder.js";
 import { acquireProcessLock } from "../src/io/processLock.js";
 import { assertLearningCommandSafe, learningCommandSchema } from "../src/learning/commands.js";
@@ -14,6 +20,7 @@ import { isLearningShutdownMessage } from "../src/learning/launcher.js";
 import { LearningTerminalGate } from "../src/learning/terminalGate.js";
 import { publicLearningError } from "../src/learning/publicError.js";
 import { writeCurrentLearningState } from "../src/learning/sessionState.js";
+import { resumeLearningAuthentication } from "../src/learning/authentication.js";
 
 await run();
 
@@ -66,52 +73,155 @@ async function run(): Promise<void> {
     context = await chromium.launchPersistentContext(profile, { headless: false, channel: config.browserChannel, acceptDownloads: false, viewport: { width: 1440, height: 900 } });
     assertStartupActive();
     const page = context.pages()[0] ?? await context.newPage();
-    await loginToArca(page, config, credentials, { strictSelectors: true, interactive: true, manualIntervention: true });
-    assertStartupActive();
-    const recorder = new LearningRecorder(page, directory);
+    const authenticationAttempts = new AuthenticationAttemptGate();
+    const commandGate = new SessionCommandGate();
     const terminalGate = new LearningTerminalGate();
-    await recorder.start();
+    let recorder: LearningRecorder | undefined;
+    let readyState: "captcha" | "learning" | undefined;
+    let controlPort = 0;
+
+    const publishState = async (nextState: "captcha" | "learning"): Promise<void> => {
+      if (!controlPort) throw new Error("El control local de aprendizaje todavía no está listo.");
+      readyState = nextState;
+      await writeCurrentLearningState(currentPath, {
+        version: 1,
+        launchId,
+        pid: process.pid,
+        host: "127.0.0.1",
+        port: controlPort,
+        token,
+        issuerKey: credentials.issuerKey,
+        issuerName: credentials.displayName,
+        capability: args.capability,
+        intent: args.intent,
+        directory,
+        readyState: nextState,
+      });
+    };
+
+    const activateRecorder = async (): Promise<LearningRecorder> => {
+      if (!isOfficialArcaPortalUrl(page.url())) {
+        throw new Error("ARCA no confirmó el Portal de Clave Fiscal. El registrador no se habilitó.");
+      }
+      if (!recorder) {
+        const candidate = new LearningRecorder(page, directory);
+        await candidate.start();
+        recorder = candidate;
+      }
+      authenticationAttempts.markResumed();
+      await publishState("learning");
+      return recorder;
+    };
+
+    const sendCaptchaPause = async (response: http.ServerResponse): Promise<void> => {
+      authenticationAttempts.markCaptchaRequired();
+      await page.bringToFront().catch(() => undefined);
+      await publishState("captcha");
+      send(response, 200, {
+        ok: false,
+        status: "needs_manual_intervention",
+        code: new CaptchaRequiredError().code,
+        message: new CaptchaRequiredError().message,
+        readyState: "captcha",
+        captchaVisible: await isCaptchaVisible(page).catch(() => false),
+      });
+    };
+
     server = http.createServer(async (request, response) => {
       let terminalAccepted = false;
       let commandType: string | undefined;
+      let releaseCommand: (() => void) | undefined;
       try {
         if (request.headers.authorization !== `Bearer ${token}`) return send(response, 401, { ok: false, message: "No autorizado." });
-        if (request.method !== "POST") return send(response, 404, { ok: false });
+        if (request.method !== "POST" || request.url !== "/") return send(response, 404, { ok: false });
         const command = learningCommandSchema.parse(JSON.parse(await readBody(request)));
         commandType = command.type;
         assertLearningCommandSafe(command);
-        if (command.type === "finish" || command.type === "abort") {
+
+        releaseCommand = commandGate.tryAcquire();
+        if (!releaseCommand) return send(response, 409, { ok: false, status: "busy", message: "El aprendizaje ya está procesando otro comando." });
+
+        if (command.type === "status") {
+          return send(response, 200, {
+            ok: true,
+            status: readyState ?? "starting",
+            readyState: readyState ?? "starting",
+            captchaVisible: readyState === "captcha" ? await isCaptchaVisible(page).catch(() => false) : false,
+            eventCount: recorder?.count ?? 0,
+          });
+        }
+
+        if (command.type === "abort") {
           terminalGate.begin(command.type);
           terminalAccepted = true;
         }
         else terminalGate.assertOpen();
-        if (command.type === "note") await recorder.note(command.text);
-        if (command.type === "checkpoint") await recorder.note(`Checkpoint: ${command.name}`, command.name);
-        if (command.type === "inspect") return send(response, 200, { ok: true, status: "learning", inspection: await recorder.inspect(command.pageIndex) });
-        if (command.type === "click-exact") await recorder.clickExact(command.inspectionId, command.text);
-        if (command.type === "select-exact") await recorder.selectExact(command.inspectionId, command.index, command.option);
-        if (command.type === "fill-input") await recorder.fillInput(command.inspectionId, command.index, command.value);
-        if (command.type === "check-exact") await recorder.checkExact(command.inspectionId, command.text);
-        if (command.type === "press") await recorder.press(command.inspectionId, command.key);
-        if (command.type === "finish") {
-          const candidatePath = await recorder.finish({ capability: args.capability, intent: args.intent, issuerKey: credentials.issuerKey });
-          send(response, 200, { ok: true, status: "candidate_generated", candidatePath });
-          requestStop();
-          return;
-        }
+
         if (command.type === "abort") {
-          await recorder.settle();
+          await recorder?.settle();
           send(response, 200, { ok: true, status: "aborted" });
           requestStop();
           return;
         }
-        send(response, 200, { ok: true, status: "learning", eventCount: recorder.count, url: recorder.url, directory });
+
+        if (command.type === "resume-authentication") {
+          const outcome = await resumeLearningAuthentication({
+            gate: authenticationAttempts,
+            isCaptchaVisible: async () => await isCaptchaVisible(page),
+            currentUrl: () => page.url(),
+            continueAccess: async () => await continueArcaAccessIfRequested(page, credentials, {
+              strictSelectors: true,
+              interactive: true,
+              manualIntervention: false,
+            }),
+          });
+          if (outcome === "captcha") return await sendCaptchaPause(response);
+          if (outcome === "unexpected") {
+            return send(response, 200, {
+              ok: false,
+              status: "needs_manual_intervention",
+              message: "La pantalla visible no es el login oficial ni el Portal de Clave Fiscal esperado. No se reenvió ningún formulario.",
+              readyState: "captcha",
+            });
+          }
+          const activeRecorder = await activateRecorder();
+          return send(response, 200, { ok: true, status: "learning", readyState: "learning", eventCount: activeRecorder.count });
+        }
+
+        if (await isCaptchaVisible(page)) return await sendCaptchaPause(response);
+        authenticationAttempts.assertMutationAllowed();
+        const activeRecorder = recorder;
+        if (!activeRecorder || readyState !== "learning") {
+          throw new Error("El aprendizaje sigue pausado antes del login. Solo se admite status, resume-authentication o abort.");
+        }
+
+        if (command.type === "finish") {
+          terminalGate.begin(command.type);
+          terminalAccepted = true;
+        }
+        if (command.type === "note") await activeRecorder.note(command.text);
+        if (command.type === "checkpoint") await activeRecorder.note(`Checkpoint: ${command.name}`, command.name);
+        if (command.type === "inspect") return send(response, 200, { ok: true, status: "learning", inspection: await activeRecorder.inspect(command.pageIndex) });
+        if (command.type === "click-exact") await activeRecorder.clickExact(command.inspectionId, command.text);
+        if (command.type === "select-exact") await activeRecorder.selectExact(command.inspectionId, command.index, command.option);
+        if (command.type === "fill-input") await activeRecorder.fillInput(command.inspectionId, command.index, command.value);
+        if (command.type === "check-exact") await activeRecorder.checkExact(command.inspectionId, command.text);
+        if (command.type === "press") await activeRecorder.press(command.inspectionId, command.key);
+        if (command.type === "finish") {
+          const candidatePath = await activeRecorder.finish({ capability: args.capability, intent: args.intent, issuerKey: credentials.issuerKey });
+          send(response, 200, { ok: true, status: "candidate_generated", candidatePath });
+          requestStop();
+          return;
+        }
+        send(response, 200, { ok: true, status: "learning", eventCount: activeRecorder.count, url: activeRecorder.url, directory });
       } catch (error) {
         try {
           send(response, 400, { ok: false, message: publicLearningError(commandType, error) });
         } finally {
-          if (terminalAccepted) requestStop();
+          if (terminalAccepted || error instanceof InvalidArcaCredentialsError) requestStop();
         }
+      } finally {
+        releaseCommand?.();
       }
     });
 
@@ -121,7 +231,29 @@ async function run(): Promise<void> {
     });
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("No se pudo iniciar el control de aprendizaje.");
-    await writeCurrentLearningState(currentPath, { version: 1, launchId, pid: process.pid, host: "127.0.0.1", port: address.port, token, issuerKey: credentials.issuerKey, issuerName: credentials.displayName, capability: args.capability, intent: args.intent, directory });
+    controlPort = address.port;
+
+    // El launcher desacopla este worker con stdin=ignore. El control HTTP ya
+    // está disponible cuando el login detecta un captcha, de modo que Chrome
+    // puede permanecer visible sin readline ni reintentos automáticos.
+    try {
+      await loginToArca(page, config, credentials, { strictSelectors: true, interactive: true, manualIntervention: false });
+    } catch (error) {
+      if (error instanceof InvalidArcaCredentialsError) authenticationAttempts.markRejected();
+      if (!isCaptchaRequiredError(error)) throw error;
+      authenticationAttempts.markCaptchaRequired();
+      await page.bringToFront().catch(() => undefined);
+      await publishState("captcha");
+      assertStartupActive();
+      console.log("READY_STATE=captcha");
+      console.log(`LEARNING_DIR=${directory}`);
+      await stopped;
+      await shutdown();
+      return;
+    }
+
+    assertStartupActive();
+    await activateRecorder();
     assertStartupActive();
     console.log("READY_STATE=learning");
     console.log(`LEARNING_DIR=${directory}`);

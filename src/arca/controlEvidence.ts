@@ -18,6 +18,10 @@ export type InvoiceControlEvidence = {
   recipientVatCondition?: string;
   description?: string;
   amount?: string;
+  quantity?: string;
+  unitPrice?: string;
+  subtotal?: string;
+  total?: string;
 };
 
 export async function captureIssuerEvidence(page: Page, job: ResolvedInvoiceJob): Promise<InvoiceControlEvidence> {
@@ -71,8 +75,9 @@ export async function captureRecipientEvidence(page: Page, job: ResolvedInvoiceJ
 export async function captureDetailEvidence(page: Page, job: ResolvedInvoiceJob): Promise<InvoiceControlEvidence> {
   assertOfficialArcaRcelUrl(page.url(), "la captura del detalle de la operación");
   const description = await requiredInput(page.locator("#detalle_descripcion1"), "Descripción", job.description);
-  const amount = await requiredInput(page.locator("#detalle_precio1"), "Precio unitario", job.amount.toFixed(2));
-  return { description, amount };
+  const quantity = await requiredInput(page.locator("#detalle_cantidad1"), "Cantidad", "1");
+  const unitPrice = await requiredInput(page.locator("#detalle_precio1"), "Precio unitario", job.amount.toFixed(2));
+  return { description, quantity, unitPrice, amount: unitPrice };
 }
 
 async function requiredInput(locator: Locator, name: string, expected: string): Promise<string> {

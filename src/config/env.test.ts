@@ -25,29 +25,35 @@ test("el routing canónico resuelve un CUIT localmente y rechaza un DV inválido
   }
 });
 
-test("el proveedor env queda bloqueado en todas las rutas operativas y los errores no exponen secretos", async () => {
+test("un proveedor temporal desconocido queda bloqueado y los errores no exponen secretos", async () => {
   const testValue = ["valor", "no", "real"].join("-");
   const previous = {
     provider: process.env.ARCA_CREDENTIAL_PROVIDER,
+    file: process.env.ARCA_CREDENTIAL_FILE,
     cuit: process.env.ARCA_CLIENT_EMISOR_PRUEBA_CUIT,
     clave: process.env.ARCA_CLIENT_EMISOR_PRUEBA_CLAVE,
   };
   try {
-    process.env.ARCA_CREDENTIAL_PROVIDER = "env";
+    process.env.ARCA_CREDENTIAL_PROVIDER = "desconocido";
+    delete process.env.ARCA_CREDENTIAL_FILE;
     process.env.ARCA_CLIENT_EMISOR_PRUEBA_CUIT = "20-00000000-1";
     process.env.ARCA_CLIENT_EMISOR_PRUEBA_CLAVE = testValue;
     const assertPublicError = (error: unknown): boolean => {
       assert.ok(error instanceof Error);
-      assert.match(error.message, /solo admiten credenciales del Administrador de credenciales de Windows/i);
+      assert.match(error.message, /ARCA_CREDENTIAL_PROVIDER_UNAVAILABLE/i);
       assert.doesNotMatch(error.message, new RegExp(testValue));
       return true;
     };
     assert.throws(() => loadCredentials("Emisor Prueba"), assertPublicError);
     await assert.rejects(loadCredentialsAsync("Emisor Prueba"), assertPublicError);
     assert.throws(() => resolveCredentialIdentity("Emisor Prueba"), assertPublicError);
-    assert.throws(() => resolveCredentialRoutingIdentity("20-00000000-1"), assertPublicError);
+    assert.deepEqual(resolveCredentialRoutingIdentity("20-00000000-1"), {
+      issuerKey: "20000000001",
+      cuit: "20000000001",
+    });
   } finally {
     restoreEnv("ARCA_CREDENTIAL_PROVIDER", previous.provider);
+    restoreEnv("ARCA_CREDENTIAL_FILE", previous.file);
     restoreEnv("ARCA_CLIENT_EMISOR_PRUEBA_CUIT", previous.cuit);
     restoreEnv("ARCA_CLIENT_EMISOR_PRUEBA_CLAVE", previous.clave);
   }

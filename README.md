@@ -47,12 +47,12 @@ El núcleo público está compuesto por:
 
 La skill está diseñada para Codex. Después de abrir la raíz del repositorio en Codex, invóquela explícitamente con `$arca-web-control` para que el agente cargue sus reglas operativas. La skill no es autónoma: depende del CLI versionado, las dependencias y los manifiestos de este repositorio. Otro agente puede adaptarla si sabe interpretar `SKILL.md` y ejecutar ese CLI local, pero esa compatibilidad no está garantizada.
 
-Las personalizaciones de cada instalación no forman parte del proyecto público. Credenciales, emisores, perfiles de regímenes, jobs reales, sesiones, aprendizaje crudo, capturas, logs, ledger, PDFs y metadatos deben permanecer en `%LOCALAPPDATA%\ManejoARCA` o en el Administrador de credenciales de Windows, nunca en Git. Los comprobantes validados se organizan bajo `downloads\Emisores\<CUIT - nombre>\Comprobantes Emitidos\<AAAA>\<MM>`.
+Las personalizaciones de cada instalación no forman parte del proyecto público. Credenciales, emisores, perfiles de regímenes, jobs reales, sesiones, aprendizaje crudo, capturas, logs, ledger, PDFs y metadatos deben permanecer fuera de Git. El runtime vive en `%LOCALAPPDATA%\ManejoARCA`; las claves pueden permanecer en Windows Credential Manager o en un archivo externo elegido por el usuario. Los comprobantes validados se organizan bajo `downloads\Emisores\<CUIT - nombre>\Comprobantes Emitidos\<AAAA>\<MM>`.
 
 ## Principios de seguridad
 
-- Las claves fiscales no se envían al chat, no se pasan como argumentos y no se imprimen.
-- El CUIT identifica de forma única una credencial en el Administrador de credenciales de Windows.
+- Las claves fiscales no se pasan como argumentos, no se imprimen y nunca se incorporan a Git.
+- El usuario elige y protege su proveedor; el CUIT identifica de forma única cada credencial y el nombre es solo un selector potencialmente ambiguo.
 - El navegador permanece visible para las primeras validaciones y para toda capacidad que no sea `fast_path`.
 - `prepare-invoice` produce un resumen verificable y un `preparedInvoiceId` con vencimiento.
 - Si una versión futura vuelve a habilitar emisión, solo la confirmación exacta `EMITIR` podrá autorizarla.
@@ -86,9 +86,17 @@ npm run validate:public
 npm run mcp:smoke
 ```
 
+Si `%LOCALAPPDATA%\ManejoARCA` ya existía antes de instalar esta revisión, el primer comando operativo se detendrá hasta realizar una única migración de permisos sobre los subárboles administrados:
+
+```powershell
+npm run arca:runtime:repair -- --write REPARAR_RUNTIME
+```
+
+La migración escribe un marcador privado. No recorre carpetas históricas desconocidas y no vuelve a formar parte del camino rutinario.
+
 ## Credenciales
 
-El único proveedor operativo admitido es el Administrador de credenciales de Windows. El alta es interactiva: solicita el CUIT y después la clave sin mostrarla.
+Windows Credential Manager es el proveedor predeterminado. El alta es interactiva: solicita el CUIT y después la clave sin mostrarla.
 
 ```powershell
 npm run arca:credentials:set -- "EMISOR DE PRUEBA"
@@ -102,13 +110,20 @@ npm run arca:credentials:update -- <CUIT_EMISOR> ACTUALIZAR_CREDENCIAL
 npm run arca:credentials:delete -- <CUIT_EMISOR> ELIMINAR_CREDENCIAL
 ```
 
-No copie credenciales, archivos CSV de clientes ni valores reales a un issue, pull request, fixture o conversación con un agente.
+Como alternativa, el usuario puede señalar un archivo JSON externo que ARCA Web Control abre solo para lectura:
+
+```powershell
+npm run arca:credentials:provider -- set json-file "D:\Datos privados\credenciales-arca.json"
+npm run arca:credentials:provider -- set windows
+```
+
+No copie credenciales, archivos CSV de clientes ni valores reales a un issue, pull request o fixture. El agente nunca debe repetir una clave recibida ni trasladarla a argumentos, logs o archivos del repositorio.
 
 `.env.local` no puede usarse durante una sesión. Existe únicamente como vía transitoria para `arca:credentials:migrate-env`; después de migrar y comprobar el acceso, debe eliminarse. Consulte [Seguridad y credenciales](docs/seguridad-y-credenciales.md).
 
 ## Preparar una Factura C de servicios
 
-Parta de [jobs/factura.example.json](jobs/factura.example.json) y guarde el job real exclusivamente en `%LOCALAPPDATA%\ManejoARCA\jobs\private`. Si los datos llegan por chat, use `npm run arca:job:create` con JSON por `stdin`; el comando resuelve el emisor, fija el alcance vigente, aplica ACL privada y devuelve un handle opaco. La sesión y el MCP rechazan cualquier otra ubicación, enlaces y archivos no JSON. El contrato vigente exige `schemaVersion: 2`, `currency: "ARS"`, un `operationId` único, el CUIT canónico del emisor, la condición frente al IVA del receptor, fechas ISO, CUIT válidos y el importe como cadena decimal de dos dígitos. La moneda no se infiere: si falta `currency` o tiene otro valor, el job se rechaza antes de navegar.
+Parta de [jobs/factura.example.json](jobs/factura.example.json) para comprender el contrato. Si los datos llegan por chat, use `npm run arca:invoice:prepare-chat` con JSON por `stdin`; el agente agrega un UUID privado `intentId` y `intentRevision: 1`, el comando normaliza fechas e importes, resuelve el emisor, persiste la identidad del job antes de abrir Chrome, inicia o reutiliza una sesión visible y devuelve el resumen sin exponer identificadores internos. El mismo `intentId` se conserva únicamente al reconstruir la misma solicitud; una factura nueva recibe otro aunque sus datos sean idénticos. Una corrección humana previa a la emisión conserva el UUID e incrementa la revisión. `arca:job:create`, `arca:session:start` y `arca:session:cmd` siguen disponibles como primitivas de diagnóstico.
 
 ```powershell
 npm run arca:session:start -- --issuer <CUIT_EMISOR>
@@ -131,11 +146,14 @@ El modo de aprendizaje permite observar una operación nueva con Chrome visible:
 
 ```powershell
 npm run arca:learn:start -- --issuer <CUIT_EMISOR> --capability <slug> --intent "<objetivo>"
+npm run arca:learn:cmd -- resume-authentication
 npm run arca:learn:cmd -- note "<explicación sin datos personales>"
 npm run arca:learn:cmd -- checkpoint "<etiqueta genérica sin datos reales>"
 npm run arca:learn:cmd -- finish
 npm run arca:learn:cmd -- abort
 ```
+
+Si el inicio queda en `READY_STATE=captcha`, Chrome permanece abierto y el registrador no comienza. Después de resolver el captcha manualmente, confirme la intervención y ejecute explícitamente `resume-authentication` sobre ese mismo aprendizaje; el sistema nunca lo ejecuta de forma automática. Una clave rechazada detiene el worker sin un segundo intento.
 
 El aprendizaje crudo es privado. Los textos de `note` y los nombres de `checkpoint` se guardan literalmente y no se anonimizan automáticamente: no introduzca allí datos reales ni secretos. No debe publicarse HTML, screenshots, PDFs, traces, logs ni eventos obtenidos de una sesión real. `finish` genera solamente un candidato local: no crea una capacidad productiva ni habilita acciones irreversibles. Use `abort` para cancelar de forma segura ante datos personales, una pantalla inesperada o un recorrido que no deba conservarse; la cancelación no genera candidato.
 

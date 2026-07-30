@@ -19,6 +19,10 @@ export const currentLearningStateSchema = z.object({
   capability: z.string().regex(/^[a-z0-9-]{1,128}$/),
   intent: safeText(1_000),
   directory: z.string().trim().min(1).refine(path.isAbsolute, "La carpeta de aprendizaje debe ser absoluta."),
+  // Los estados anteriores a la pausa durable no incluían este campo. El
+  // default conserva compatibilidad únicamente como aprendizaje ya listo;
+  // una pausa nueva siempre se persiste de forma explícita como `captcha`.
+  readyState: z.enum(["captcha", "learning"]).default("learning"),
 }).strict();
 
 export type CurrentLearningState = z.infer<typeof currentLearningStateSchema>;

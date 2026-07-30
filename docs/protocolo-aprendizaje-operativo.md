@@ -1,5 +1,7 @@
 # Protocolo de aprendizaje operativo
 
+Este protocolo aplica al desarrollo o a una variante nueva. Una operación rutinaria de una capacidad ya implementada no ejecuta sincronización, pruebas, auditorías ni `autoreview` como precondición.
+
 Este protocolo convierte una operación nueva o una variante de ARCA en una capacidad reproducible. El aprendizaje nunca queda solamente en el chat.
 
 ## Clasificación
@@ -15,7 +17,7 @@ Toda variante irreversible se trata como nueva hasta llegar a un resumen verific
 
 1. Leer roadmap, operación Chrome, este protocolo y el manifiesto relacionado.
 2. Iniciar `arca:learn:start` con emisor, slug e intención explícita.
-3. Completar login y captcha con intervención humana cuando corresponda; el registro empieza después del login.
+3. Completar el login. Si aparece un captcha, el worker y Chrome quedan pausados, el registro todavía no comienza y no se reenvía el formulario. Después de una intervención humana confirmada por un mensaje nuevo, ejecutar explícitamente `arca:learn:cmd -- resume-authentication` sobre esa misma sesión. Una credencial rechazada termina el worker sin segundo intento.
 4. El dueño puede interactuar directamente o guiar al agente por chat.
 5. El agente puede usar `inspect`, `click-exact`, `select-exact`, `fill-input`, `check-exact` y `press`. Si hay varias pestañas, debe usar `inspect <índice-pestaña>` y elegir una explícitamente. Cada mutación queda ligada a esa página y requiere el `inspectionId` de un solo uso producido inmediatamente antes; cualquier cambio de URL, DOM o estado del formulario obliga a reinspeccionar.
 6. Registrar `note` y `checkpoint` en puntos críticos.
@@ -51,7 +53,7 @@ Si falta un punto, asignar únicamente la madurez que la evidencia disponible pe
 
 ## Recuperación
 
-- Captcha: pausar y solicitar intervención humana.
+- Captcha: pausar y solicitar intervención humana; conservar la misma sesión visible y reanudar únicamente mediante `arca:learn:cmd -- resume-authentication` después de una confirmación humana nueva.
 - `403 Forbidden` o sesión expirada: no reenviar el formulario. Finalizar el tramo con evidencia, autenticar nuevamente y reconstruir el borrador desde el último checkpoint lógico.
 - Selector ambiguo o campo cambiado: capturar estado, no elegir por parecido y actualizar bajo supervisión.
 - Acción irreversible iniciada sin confirmación de resultado: marcar `unknown`, bloquear reintento y consultar ARCA.

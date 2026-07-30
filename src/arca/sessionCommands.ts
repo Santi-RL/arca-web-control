@@ -11,6 +11,7 @@ const commandSchemas = {
     index: z.number().int().min(0),
   }),
   selectOptions: z.object({ type: z.literal("select-options") }),
+  resumeAuthentication: z.object({ type: z.literal("resume-authentication") }),
   portal: z.object({ type: z.literal("portal") }),
   openService: z.object({
     type: z.literal("open-service"),
@@ -48,6 +49,7 @@ export const sessionCommandSchema = z.discriminatedUnion("type", [
   commandSchemas.pages,
   commandSchemas.usePage,
   commandSchemas.selectOptions,
+  commandSchemas.resumeAuthentication,
   commandSchemas.portal,
   commandSchemas.openService,
   commandSchemas.selectRepresented,
@@ -64,10 +66,11 @@ export type SessionModePolicy = {
   visibilityMode: SessionVisibilityMode;
   learnedCapability?: LearnedFlowCapability;
   revalidationCapability?: LearnedFlowCapability;
+  revalidationConsumed?: boolean;
   allowedCommands?: string[];
 };
 
-export type RedactedSessionCommand = SessionCommand;
+export type RedactedSessionCommand = { type: SessionCommand["type"] };
 
 export function parseSessionCommandArgs(argv: string[]): SessionCommand {
   if (argv.includes("--confirm-risk")) {
@@ -82,6 +85,7 @@ export function parseSessionCommandArgs(argv: string[]): SessionCommand {
     case "pages":
     case "inputs":
     case "select-options":
+    case "resume-authentication":
     case "portal":
       assertNoArgs(command, args);
       return { type: command };
@@ -136,6 +140,9 @@ export function parseSessionCommandArgs(argv: string[]): SessionCommand {
 }
 
 export function assertCommandAllowedInSessionMode(command: SessionCommand, policy: SessionModePolicy): void {
+  if (policy.revalidationCapability && policy.revalidationConsumed && !isReadOnlyAfterRevalidation(command.type)) {
+    throw new Error("La única acción irreversible de esta sesión de revalidación ya fue consumida; cerrá la sesión y reconciliá el resultado antes de continuar.");
+  }
   if (command.type === "revalidate-prepared-invoice") {
     if (policy.visibilityMode !== "visible" || !policy.revalidationCapability) {
       throw new Error("revalidate-prepared-invoice solo se admite en una sesión visible iniciada explícitamente para revalidación irreversible.");
@@ -155,8 +162,12 @@ export function assertCommandAllowedInSessionMode(command: SessionCommand, polic
   }
 }
 
+function isReadOnlyAfterRevalidation(command: SessionCommand["type"]): boolean {
+  return ["status", "snapshot", "screenshot", "pages", "select-options", "inputs"].includes(command);
+}
+
 export function redactCommandForLog(command: SessionCommand): RedactedSessionCommand {
-  return command;
+  return { type: command.type };
 }
 
 export function extractBearerToken(value: string | string[] | undefined): string | undefined {

@@ -64,6 +64,10 @@ test("la revalidación irreversible exige estado coherente y una sesión visible
   assert.equal(currentSessionStateSchema.safeParse(revalidationState).success, true);
   assert.equal(currentSessionStateSchema.safeParse({
     ...revalidationState,
+    state: { ...revalidationState.state, revalidationConsumed: true },
+  }).success, true);
+  assert.equal(currentSessionStateSchema.safeParse({
+    ...revalidationState,
     state: { ...revalidationState.state, revalidationCapability: undefined },
   }).success, false);
   assert.equal(currentSessionStateSchema.safeParse({
@@ -75,5 +79,9 @@ test("la revalidación irreversible exige estado coherente y una sesión visible
       visibilityMode: "production-hidden",
       learnedCapability: "invoice-services-single-item",
     },
+  }).success, false);
+  assert.equal(currentSessionStateSchema.safeParse({
+    ...validState,
+    state: { ...validState.state, revalidationConsumed: true },
   }).success, false);
 });

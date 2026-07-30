@@ -1,17 +1,15 @@
-import { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { loadInvoiceJob } from "../src/jobs/schema.js";
+import { parseInvoiceJobJson } from "../src/jobs/schema.js";
 import { hashCanonicalJob } from "../src/arca/preparedInvoice.js";
 import { inspectArcaInvoicePdf } from "../src/arca/invoicePdf.js";
 import { OperationLedger } from "../src/arca/operationLedger.js";
 import { sha256File } from "../src/arca/emission.js";
-import { publishReservedPdf, reservePrivatePdfDestination } from "../src/config/privateDownloads.js";
 import { resolveCredentialRoutingIdentity } from "../src/config/env.js";
-import { getRuntimePaths } from "../src/config/runtimePaths.js";
-import { buildInvoiceArtifactPaths, buildInvoiceStagingPdfPath, publishInvoiceArtifacts } from "../src/arca/invoiceArchive.js";
+import { ensureRuntimeLayout, getRuntimePaths } from "../src/config/runtimePaths.js";
+import { buildInvoiceArtifactPaths, publishInvoiceArtifactsForJob } from "../src/arca/invoiceArchive.js";
+import { readPrivateInvoiceJobFile } from "../src/config/privateJobs.js";
+import { stagePrivateRecoveryPdf } from "../src/config/privateRecoveryPdf.js";
 
-const runtime = getRuntimePaths();
+const runtime = await ensureRuntimeLayout(getRuntimePaths());
 const confirmation = "RECUPERAR_Y_RECONCILIAR";
 const values = process.argv.slice(2);
 const option = (name: string): string | undefined => {
@@ -26,19 +24,10 @@ if (!jobPath || !sourcePath || write === dryRun || (write && values.at(-1) !== c
   throw new Error(`Uso: arca:invoice:recover-pdf -- --job <job-v2> --source <pdf-descargado> --dry-run | --write ${confirmation}`);
 }
 
-const source = await validateSource(sourcePath);
-const loadedJob = await loadInvoiceJob(jobPath, runtime.downloads);
+const privateJob = await readPrivateInvoiceJobFile(jobPath, runtime.privateJobs, runtime.root);
+const loadedJob = parseInvoiceJobJson(privateJob.contents, privateJob.path, runtime.downloads);
 const identity = resolveCredentialRoutingIdentity(loadedJob.issuerKey);
 const job = { ...loadedJob, issuerKey: identity.issuerKey };
-const evidence = await inspectArcaInvoicePdf(source, {
-  voucherType: job.voucherType,
-  pointOfSale: job.pointOfSale,
-  issueDate: formatDate(job.date),
-  recipientCuit: job.recipientCuit,
-  description: job.description,
-  amountCents: job.amountCents,
-});
-const sourceSha256 = await sha256File(source);
 const ledger = new OperationLedger(runtime.ledger);
 const jobHash = hashCanonicalJob(job);
 const current = await ledger.get(job.operationId);
@@ -48,63 +37,58 @@ if (!current || current.status !== "unknown" || current.jobHash !== jobHash) {
 if (!current.issuer) {
   throw new Error("El ledger unknown no contiene la identidad verificada del emisor necesaria para el archivo canónico.");
 }
-const artifacts = await buildInvoiceArtifactPaths(job, current.issuer, {
-  voucherNumber: evidence.voucherNumber,
-  cae: evidence.cae,
-  pdfSha256: sourceSha256,
-}, jobHash);
-
-if (dryRun) {
-  console.log("DRY_RUN=1");
-  console.log(`VOUCHER_NUMBER=${evidence.voucherNumber}`);
-  console.log(`CAE=${evidence.cae}`);
-  console.log(`PDF_PAGES=${evidence.pageCount}`);
-  console.log(`PDF_SHA256=${sourceSha256}`);
-  console.log(`PDF_TARGET=${artifacts.pdfPath}`);
-  console.log(`METADATA_TARGET=${artifacts.metadataPath}`);
-  process.exit(0);
-}
-
-const stagingTarget = buildInvoiceStagingPdfPath(`${job.operationId}:recovery:${sourceSha256}`, runtime.downloads);
-const reservation = await reservePrivatePdfDestination(stagingTarget, runtime.downloads, runtime.root);
-let stagingPdfPath: string;
+const stableSource = await stagePrivateRecoveryPdf(sourcePath, job.operationId, runtime.downloads, runtime.root);
 try {
-  await fs.copyFile(source, reservation.temporaryPath, fsConstants.COPYFILE_EXCL);
-  stagingPdfPath = await publishReservedPdf(reservation);
-} finally {
-  await reservation.release();
-}
-const published = await publishInvoiceArtifacts(stagingPdfPath, artifacts, runtime.downloads, runtime.root);
-const pdfSha256 = await sha256File(published.pdfPath);
-if (pdfSha256 !== sourceSha256) throw new Error("El hash del PDF publicado no coincide con la descarga validada.");
-await ledger.reconcileUnknownAsEmitted(job.operationId, jobHash, {
-  voucherNumber: evidence.voucherNumber,
-  cae: evidence.cae,
-  pdfPath: published.pdfPath,
-  metadataPath: published.metadataPath,
-  pdfSha256,
-});
-console.log("RECOVERED=1");
-console.log("LEDGER_STATUS=emitted");
-console.log(`VOUCHER_NUMBER=${evidence.voucherNumber}`);
-console.log(`CAE=${evidence.cae}`);
-console.log(`PDF_PAGES=${evidence.pageCount}`);
-console.log(`PDF_SHA256=${pdfSha256}`);
-console.log(`PDF_PATH=${published.pdfPath}`);
-console.log(`METADATA_PATH=${published.metadataPath}`);
+  const evidence = await inspectArcaInvoicePdf(stableSource.path, {
+    voucherType: job.voucherType,
+    pointOfSale: job.pointOfSale,
+    issueDate: formatDate(job.date),
+    recipientCuit: job.recipientCuit,
+    description: job.description,
+    amountCents: job.amountCents,
+  });
+  const sourceSha256 = await sha256File(stableSource.path);
+  const artifacts = await buildInvoiceArtifactPaths(job, current.issuer, {
+    voucherNumber: evidence.voucherNumber,
+    cae: evidence.cae,
+    pdfSha256: sourceSha256,
+  }, jobHash);
 
-async function validateSource(value: string): Promise<string> {
-  const resolved = path.resolve(value);
-  const stat = await fs.lstat(resolved);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("La fuente de recuperación debe ser un archivo regular, no un enlace.");
-  if (stat.size < 1_024 || stat.size > 50 * 1024 * 1024) throw new Error("El tamaño del PDF de recuperación está fuera del rango permitido.");
-  const real = await fs.realpath(resolved);
-  const repository = await fs.realpath(process.cwd());
-  const relative = path.relative(repository, real);
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
-    throw new Error("El PDF fiscal de recuperación no puede estar dentro del repositorio.");
+  if (dryRun) {
+    console.log("DRY_RUN=1");
+    console.log(`VOUCHER_NUMBER=${evidence.voucherNumber}`);
+    console.log(`CAE=${evidence.cae}`);
+    console.log(`PDF_PAGES=${evidence.pageCount}`);
+    console.log(`PDF_SHA256=${sourceSha256}`);
+    console.log(`PDF_TARGET=${artifacts.pdfPath}`);
+    console.log(`METADATA_TARGET=${artifacts.metadataPath}`);
+  } else {
+    const stagingPdfPath = await stableSource.publish();
+    const published = await publishInvoiceArtifactsForJob(stagingPdfPath, job, current.issuer, {
+      voucherNumber: evidence.voucherNumber,
+      cae: evidence.cae,
+      pdfSha256: sourceSha256,
+    }, jobHash, runtime.downloads, runtime.root);
+    const pdfSha256 = await sha256File(published.pdfPath);
+    if (pdfSha256 !== sourceSha256) throw new Error("El hash del PDF publicado no coincide con la copia privada validada.");
+    await ledger.reconcileUnknownAsEmitted(job.operationId, jobHash, {
+      voucherNumber: evidence.voucherNumber,
+      cae: evidence.cae,
+      pdfPath: published.pdfPath,
+      metadataPath: published.metadataPath,
+      pdfSha256,
+    });
+    console.log("RECOVERED=1");
+    console.log("LEDGER_STATUS=emitted");
+    console.log(`VOUCHER_NUMBER=${evidence.voucherNumber}`);
+    console.log(`CAE=${evidence.cae}`);
+    console.log(`PDF_PAGES=${evidence.pageCount}`);
+    console.log(`PDF_SHA256=${pdfSha256}`);
+    console.log(`PDF_PATH=${published.pdfPath}`);
+    console.log(`METADATA_PATH=${published.metadataPath}`);
   }
-  return real;
+} finally {
+  await stableSource.release();
 }
 
 function formatDate(value: string): string {

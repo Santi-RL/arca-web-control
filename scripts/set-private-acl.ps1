@@ -2,7 +2,7 @@ param(
   [Parameter(Mandatory = $true, Position = 0)]
   [string]$Target,
   [Parameter(Mandatory = $true, Position = 1)]
-  [ValidateSet('file', 'directory', 'layout')]
+  [ValidateSet('file', 'directory', 'layout', 'repair')]
   [string]$Kind
 )
 
@@ -67,6 +67,9 @@ function Set-ExclusiveAcl {
     if ($normalizedOwnerSid -ne $currentSid.Value) { throw 'No se pudo normalizar el propietario del recurso privado.' }
     $expectedOwnerSid = $currentSid.Value
   }
+  if (Test-ExclusiveAcl -Acl $acl -Directory $Directory -ExpectedOwnerSid $expectedOwnerSid) {
+    return
+  }
   $acl.SetAccessRuleProtection($true, $false)
   foreach ($existingRule in @($acl.Access)) {
     $null = $acl.RemoveAccessRuleSpecific($existingRule)
@@ -81,25 +84,88 @@ function Set-ExclusiveAcl {
   $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($systemSid, $rights, $inheritance, $propagation, $allow))
   $item.SetAccessControl($acl)
 
+  $verified = Get-Acl -LiteralPath $resolved
+  if (-not (Test-ExclusiveAcl -Acl $verified -Directory $Directory -ExpectedOwnerSid $expectedOwnerSid)) {
+    throw 'La ACL privada no coincide con usuario actual y SYSTEM después de protegerla.'
+  }
+}
+
+function Test-ExclusiveAcl {
+  param(
+    [Parameter(Mandatory = $true)]
+    [Security.AccessControl.FileSystemSecurity]$Acl,
+    [Parameter(Mandatory = $true)]
+    [bool]$Directory,
+    [Parameter(Mandatory = $true)]
+    [string]$ExpectedOwnerSid
+  )
+
+  if ($Acl.AreAccessRulesProtected -ne $true) { return $false }
+  if ($Acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $ExpectedOwnerSid) { return $false }
   $expected = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
   $null = $expected.Add($currentSid.Value)
   $null = $expected.Add($systemSid.Value)
-  $verified = Get-Acl -LiteralPath $resolved
   $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-  foreach ($rule in @($verified.Access)) {
+  $ruleCount = 0
+  foreach ($rule in @($Acl.Access)) {
+    $ruleCount += 1
     $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-    if (-not $expected.Contains($sid) -or $rule.AccessControlType -ne $allow -or (($rule.FileSystemRights -band $rights) -ne $rights)) {
-      throw 'La ACL privada conserva una entrada no autorizada.'
+    if ($rule.IsInherited -or -not $expected.Contains($sid) -or $rule.AccessControlType -ne $allow -or (($rule.FileSystemRights -band $rights) -ne $rights)) {
+      return $false
     }
+    if ($Directory) {
+      $requiredInheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+      if (($rule.InheritanceFlags -band $requiredInheritance) -ne $requiredInheritance) { return $false }
+    } elseif ($rule.InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None) {
+      return $false
+    }
+    if ($rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) { return $false }
     $null = $seen.Add($sid)
   }
-  if ($seen.Count -ne $expected.Count) { throw 'La ACL privada no contiene todas las identidades requeridas.' }
-  if ($verified.AreAccessRulesProtected -ne $true) { throw 'La ACL privada conserva herencia habilitada.' }
-  $verifiedOwnerSid = $verified.GetOwner([Security.Principal.SecurityIdentifier]).Value
-  if ($verifiedOwnerSid -ne $expectedOwnerSid) { throw 'El recurso privado cambió de propietario durante la protección de la ACL.' }
+  return $ruleCount -eq 2 -and $seen.Count -eq $expected.Count
 }
 
-function Assert-TreeHasNoReparsePoints {
+if ($Kind -eq 'file' -or $Kind -eq 'repair') {
+  Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+
+public static class ManejoArcaFileLinks {
+  [StructLayout(LayoutKind.Sequential)]
+  private struct BY_HANDLE_FILE_INFORMATION {
+    public uint FileAttributes;
+    public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+    public uint VolumeSerialNumber;
+    public uint FileSizeHigh;
+    public uint FileSizeLow;
+    public uint NumberOfLinks;
+    public uint FileIndexHigh;
+    public uint FileIndexLow;
+  }
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetFileInformationByHandle(IntPtr handle, out BY_HANDLE_FILE_INFORMATION information);
+
+  public static uint GetLinkCount(string path) {
+    FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+    try {
+      BY_HANDLE_FILE_INFORMATION information;
+      if (!GetFileInformationByHandle(stream.SafeFileHandle.DangerousGetHandle(), out information)) {
+        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+      }
+      return information.NumberOfLinks;
+    } finally {
+      stream.Dispose();
+    }
+  }
+}
+'@
+}
+
+function Assert-TreeHasNoReparsePointsOrHardLinks {
   param(
     [Parameter(Mandatory = $true)]
     [string]$Root
@@ -115,36 +181,55 @@ function Assert-TreeHasNoReparsePoints {
       }
       if ($child.PSIsContainer) {
         $pending.Push($child.FullName)
+      } elseif ([ManejoArcaFileLinks]::GetLinkCount($child.FullName) -ne 1) {
+        throw 'La estructura privada contiene un archivo con hard links fuera de su identidad canónica.'
       }
     }
   }
 }
 
-if ($Kind -eq 'layout') {
+if ($Kind -eq 'layout' -or $Kind -eq 'repair') {
   $root = (Get-RegularItem -LiteralPath $Target -Directory $true).FullName
-  $relativeDirectories = @('', 'profiles', 'issuers', 'sessions', 'learning', 'ledger', 'jobs', 'jobs\private', 'logs', 'downloads')
-  Set-ExclusiveAcl -LiteralPath $root -Directory $true
+  $relativeDirectories = @('', 'config', 'profiles', 'issuers', 'sessions', 'learning', 'ledger', 'jobs', 'jobs\private', 'private-import', 'guided', 'logs', 'downloads')
+  $managedTopLevelDirectories = @('config', 'profiles', 'issuers', 'sessions', 'learning', 'ledger', 'jobs', 'private-import', 'guided', 'logs', 'downloads')
   foreach ($relativeDirectory in $relativeDirectories) {
     $directory = if ($relativeDirectory -eq '') { $root } else { Join-Path $root $relativeDirectory }
     $null = Get-RegularItem -LiteralPath $directory -Directory $true
   }
 
-  # Se inspecciona sin recursión automática para no seguir reparse points. Una
-  # vez cerrada la raíz a usuario + SYSTEM, no hay una carrera con terceros.
-  Assert-TreeHasNoReparsePoints -Root $root
-  $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-  foreach ($child in @(Get-ChildItem -LiteralPath $root -Force)) {
-    & $icacls $child.FullName '/reset' '/T' '/Q' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'No se pudo restablecer la ACL de un recurso privado existente.' }
+  if ($Kind -eq 'repair') {
+    # La reparación profunda es mantenimiento explícito. Solo recorre los
+    # subárboles administrados; una carpeta histórica o desconocida bajo la
+    # raíz nunca forma parte de esta operación.
+    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+    # El preflight se completa para todos los árboles antes de modificar una
+    # sola ACL. Así un hardlink no puede trasladar el cambio fuera del runtime.
+    foreach ($relativeDirectory in $managedTopLevelDirectories) {
+      $directory = Join-Path $root $relativeDirectory
+      Assert-TreeHasNoReparsePointsOrHardLinks -Root $directory
+    }
   }
 
-  # Los límites fijos quedan protegidos explícitamente; sus descendientes
-  # heredan exclusivamente las ACE del usuario actual y SYSTEM.
-  foreach ($relativeDirectory in $relativeDirectories) {
+  Set-ExclusiveAcl -LiteralPath $root -Directory $true
+
+  if ($Kind -eq 'repair') {
+    foreach ($relativeDirectory in $managedTopLevelDirectories) {
+      $directory = Join-Path $root $relativeDirectory
+      & $icacls $directory '/reset' '/T' '/Q' | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw 'No se pudo restablecer la ACL de un subárbol administrado.' }
+    }
+  }
+
+  # La atestación operativa es constante respecto del volumen histórico: solo
+  # protege los límites fijos. Los objetos nuevos heredan esas ACE.
+  foreach ($relativeDirectory in $relativeDirectories | Where-Object { $_ -ne '' }) {
     $directory = if ($relativeDirectory -eq '') { $root } else { Join-Path $root $relativeDirectory }
     Set-ExclusiveAcl -LiteralPath $directory -Directory $true
   }
 } else {
+  if ($Kind -eq 'file' -and [ManejoArcaFileLinks]::GetLinkCount((Get-RegularItem -LiteralPath $Target -Directory $false).FullName) -ne 1) {
+    throw 'El recurso privado contiene hard links fuera de su identidad canónica.'
+  }
   Set-ExclusiveAcl -LiteralPath $Target -Directory ($Kind -eq 'directory')
 }
 

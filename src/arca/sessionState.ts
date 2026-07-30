@@ -26,6 +26,7 @@ const liveSessionStateSchema = z.object({
   visibilityMode: visibilityModeSchema,
   learnedCapability: capabilityIdSchema.optional(),
   revalidationCapability: capabilityIdSchema.optional(),
+  revalidationConsumed: z.boolean().default(false),
 }).strict();
 
 export const currentSessionStateSchema = z.object({
@@ -55,6 +56,9 @@ export const currentSessionStateSchema = z.object({
   }
   if (current.state.revalidationCapability !== current.revalidationCapability) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["state", "revalidationCapability"], message: "La capacidad de revalidación del estado no coincide con la sesión." });
+  }
+  if (current.state.revalidationConsumed && !current.revalidationCapability) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["state", "revalidationConsumed"], message: "Solo una sesión de revalidación puede consumir esa autorización." });
   }
   if (!samePath(current.state.artifactDir, current.artifactDir)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["state", "artifactDir"], message: "La ruta de artefactos del estado no coincide con la sesión." });

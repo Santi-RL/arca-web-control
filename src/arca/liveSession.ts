@@ -3,11 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { chromium, Locator, Page } from "playwright";
 import { ArcaCredentials, LearnedFlowCapability, ResolvedInvoiceJob, RuntimeConfig, SessionVisibilityMode } from "../types.js";
-import { loadInvoiceJob } from "../jobs/schema.js";
+import { parseInvoiceJobJson } from "../jobs/schema.js";
 import { formatDateForArca } from "../utils/date.js";
 import { isCaptchaVisible } from "./captcha.js";
+import { CaptchaRequiredError, isCaptchaRequiredError } from "./captchaErrors.js";
+import { AuthenticationAttemptGate } from "./authenticationAttemptGate.js";
 import { fillInvoice } from "./invoice.js";
-import { loginToArca } from "./login.js";
+import { continueArcaAccessIfRequested, loginToArca } from "./login.js";
+import { InvalidArcaCredentialsError } from "./loginErrors.js";
 import { openArcaService, openComprobantesEnLinea, selectRepresentedIssuer } from "./navigation.js";
 import { waitForPageSettled } from "./pageHelpers.js";
 import { assertCommandAllowedInSessionMode, redactCommandForLog, SessionCommand } from "./sessionCommands.js";
@@ -17,18 +20,17 @@ import { executeControlledEmission, sha256File } from "./emission.js";
 import { OperationLedger } from "./operationLedger.js";
 import { fingerprintPage, hashCanonicalJob, PreparedInvoiceState, PreparedInvoiceStore, PreparedInvoiceSummary } from "./preparedInvoice.js";
 import { invalidatePreparationBeforeMutation } from "./preparationLifecycle.js";
-import { PdfDestinationReservation, publishReservedPdf, reservePrivatePdfDestination, resolveRuntimePdfPath } from "../config/privateDownloads.js";
+import { PdfDestinationReservation, reservePrivatePdfDestination, resolveRuntimePdfPath } from "../config/privateDownloads.js";
 import { getRuntimePaths } from "../config/runtimePaths.js";
-import { resolvePrivateInvoiceJobPath } from "../config/privateJobs.js";
+import { readPrivateInvoiceJobFile } from "../config/privateJobs.js";
 import { resolveCredentialRoutingIdentity } from "../config/env.js";
-import { measureArcaPerformance } from "./performance.js";
+import { measureArcaPerformance, startArcaPerformance } from "./performance.js";
 import { downloadGeneratedInvoicePdf, inspectArcaInvoicePdf, type ArcaInvoicePdfEvidence } from "./invoicePdf.js";
 import { sanitizeErrorMessage } from "./publicErrors.js";
 import { requireHiddenCapability, requireInvoiceJobCapability, requireInvoiceJobVisibleRevalidation, requireVisibleInvoiceRevalidationCapability } from "../capabilities/registry.js";
 import {
   assertOfficialArcaGeneratedInvoicePageUrl,
   assertOfficialArcaInspectableUrl,
-  assertOfficialArcaLegacyPrintUrl,
   assertOfficialArcaRcelUrl,
   isOfficialArcaAuthUrl,
   isOfficialArcaInspectableUrl,
@@ -40,7 +42,9 @@ import {
 } from "./officialUrls.js";
 import { commercialAddressesMatch } from "./recipientCommercialAddress.js";
 import { assertIssuerEvidenceMatches, extractIssuerSummaryEvidence } from "./issuerEvidence.js";
-import { buildInvoiceArtifactPaths, buildInvoiceStagingPdfPath, publishInvoiceArtifacts } from "./invoiceArchive.js";
+import { buildInvoiceStagingPdfPath, publishInvoiceArtifactsForJob } from "./invoiceArchive.js";
+import { assertVisibleRevalidationAvailable, claimVisibleRevalidation, releaseVisibleRevalidationBeforeFirstClick } from "./visibleRevalidationGuard.js";
+import { prepareSessionPrivatePaths } from "./sessionPrivatePaths.js";
 
 const portalUrl = "https://portalcf.cloud.afip.gob.ar/portal/app/";
 
@@ -79,6 +83,7 @@ export type ArcaLiveSessionState = {
   visibilityMode: SessionVisibilityMode;
   learnedCapability?: LearnedFlowCapability;
   revalidationCapability?: LearnedFlowCapability;
+  revalidationConsumed: boolean;
 };
 
 export type ArcaLiveSessionResult = {
@@ -92,6 +97,8 @@ export type ArcaLiveSessionResult = {
 export class ArcaLiveSession {
   private readonly preparedInvoices = new PreparedInvoiceStore();
   private readonly ledger = new OperationLedger();
+  private revalidationConsumed = false;
+  private readonly authenticationAttempts = new AuthenticationAttemptGate();
 
   private constructor(
     private page: Page,
@@ -122,15 +129,15 @@ export class ArcaLiveSession {
         if (visibilityMode !== "visible" || options.learnedCapability) {
           throw new Error("La revalidación irreversible exige una sesión visible exclusiva, sin production-hidden ni otra capacidad.");
         }
-        await requireVisibleInvoiceRevalidationCapability(options.revalidationCapability);
+        const capability = await requireVisibleInvoiceRevalidationCapability(options.revalidationCapability);
+        await assertVisibleRevalidationAvailable(capability);
       }
-      const artifactRoot = options.artifactRoot ?? path.join(options.config.runtimeRoot, "sessions", "artifacts");
-      const artifactDir = path.join(artifactRoot, timestampForPath());
-      await fs.mkdir(artifactDir, { recursive: true });
-      throwIfStartupAborted();
-
-      const profileDir = path.join(options.config.profileRoot, `session_${sanitizePathPart(options.issuerKey)}`);
-      await fs.mkdir(profileDir, { recursive: true });
+      const { artifactDir, profileDir } = await prepareSessionPrivatePaths({
+        config: options.config,
+        issuerKey: options.issuerKey,
+        artifactName: timestampForPath(),
+        artifactRoot: options.artifactRoot,
+      });
       throwIfStartupAborted();
 
       context = await measureArcaPerformance("browser_launch", async () => await chromium.launchPersistentContext(profileDir, {
@@ -150,11 +157,22 @@ export class ArcaLiveSession {
         visibilityMode,
       });
 
-      await measureArcaPerformance("login_total", async () => await loginToArca(session.page, options.config, options.credentials, {
-          strictSelectors: true,
-          interactive: visibilityMode === "visible",
-          manualIntervention: visibilityMode === "visible",
-        }));
+      try {
+        await measureArcaPerformance("login_total", async () => await loginToArca(session.page, options.config, options.credentials, {
+            strictSelectors: true,
+            interactive: visibilityMode === "visible",
+            // La sesión canónica corre desacoplada con stdin=ignore. Nunca debe
+            // intentar resolver una pausa conversacional mediante readline.
+            manualIntervention: false,
+          }));
+      } catch (error) {
+        if (!isCaptchaRequiredError(error) || visibilityMode !== "visible") throw error;
+        throwIfStartupAborted();
+        session.authenticationAttempts.markCaptchaRequired();
+        await session.page.bringToFront().catch(() => undefined);
+        await session.writeSessionEvent("session_paused_for_captcha", { state: await session.getState() }).catch(() => undefined);
+        return session;
+      }
       throwIfStartupAborted();
       if (visibilityMode === "visible") {
         await session.page.bringToFront().catch(() => undefined);
@@ -175,7 +193,11 @@ export class ArcaLiveSession {
 
   async close(): Promise<void> {
     try {
-      await this.invalidateActivePreparation("La sesión se cerró antes de emitir.");
+      const state = await this.getState().catch(() => undefined);
+      await this.invalidateActivePreparation(
+        "La sesión se cerró antes de emitir.",
+        this.authenticationAttempts.isPausedForCaptcha() || isRecognizedPreClickInterruption(state?.readyState),
+      );
     } finally {
       await this.context.close().catch(() => undefined);
     }
@@ -185,39 +207,56 @@ export class ArcaLiveSession {
     const startedAt = new Date().toISOString();
     const start = Date.now();
     let result: ArcaLiveSessionResult;
+    const finishConfirmationToPdf = isIrreversibleCommand(command)
+      ? startArcaPerformance("emission_confirmation_to_pdf")
+      : undefined;
 
     try {
       assertCommandAllowedInSessionMode(command, {
         visibilityMode: this.options.visibilityMode,
         learnedCapability: this.options.learnedCapability,
         revalidationCapability: this.options.revalidationCapability,
+        revalidationConsumed: this.revalidationConsumed,
         allowedCommands: this.options.allowedCommands,
       });
-      if (invalidatesPreparation(command.type)) await this.invalidateActivePreparation(`La preparación fue invalidada por el comando ${command.type}.`);
-
-      const readOnly = command.type === "status" || command.type === "snapshot" || command.type === "screenshot";
+      if (!isReadOnlyCommand(command) && command.type !== "resume-authentication") {
+        this.authenticationAttempts.assertMutationAllowed();
+      }
+      const readOnly = isReadOnlyCommand(command);
       const stateBeforeCommand = readOnly ? undefined : await this.getState();
+      if (invalidatesPreparation(command.type)) {
+        await this.invalidateActivePreparation(
+          `La preparación fue invalidada por el comando ${command.type}.`,
+          command.type === "resume-authentication" || isRecognizedPreClickInterruption(stateBeforeCommand?.readyState),
+        );
+      }
       if (stateBeforeCommand?.readyState === "expired" || stateBeforeCommand?.readyState === "forbidden") {
         result = await this.manualIntervention(stateBeforeCommand.readyState === "expired"
           ? "La sesión de Clave Fiscal expiró. No se reintentará el comando; iniciá una autenticación nueva."
           : "ARCA respondió Forbidden. No se reintentará el comando; verificá el Portal de Clave Fiscal y renová la sesión si expiró.");
       } else if (!readOnly && await isCaptchaVisible(this.page)) {
+        this.authenticationAttempts.markCaptchaRequired();
         const message = this.options.visibilityMode === "production-hidden"
-          ? "ARCA esta solicitando captcha. La sesion esta en modo production-hidden; reinicia en modo visible para resolverlo manualmente."
-          : "ARCA esta solicitando captcha. Completalo manualmente en el navegador y reintenta el comando.";
+          ? "ARCA está solicitando captcha. La sesión está en modo production-hidden; reiniciá en modo visible para resolverlo manualmente."
+          : "ARCA está solicitando captcha. Completalo manualmente en el navegador y reintentá el comando.";
         result = await this.manualIntervention(message);
       } else {
-        result = await this.executeUnsafe(command);
+        result = await this.executeUnsafe(command, () => finishConfirmationToPdf?.("ok"));
       }
     } catch (error) {
-      result = {
-        ok: false,
-        status: "error",
-        message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-        state: await this.getState(),
-      };
+      if (isCaptchaRequiredError(error)) this.authenticationAttempts.markCaptchaRequired();
+      if (error instanceof InvalidArcaCredentialsError) this.authenticationAttempts.markRejected();
+      result = isCaptchaRequiredError(error) && !isIrreversibleCommand(command)
+        ? await this.manualIntervention(new CaptchaRequiredError().message)
+        : {
+            ok: false,
+            status: "error",
+            message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
+            state: await this.getState(),
+          };
     }
 
+    finishConfirmationToPdf?.("failed");
     await this.appendCommandLog(command, result, startedAt, Date.now() - start);
     return result;
   }
@@ -241,10 +280,11 @@ export class ArcaLiveSession {
       visibilityMode: this.options.visibilityMode,
       learnedCapability: this.options.learnedCapability,
       revalidationCapability: this.options.revalidationCapability,
+      revalidationConsumed: this.revalidationConsumed,
     };
   }
 
-  private async executeUnsafe(command: SessionCommand): Promise<ArcaLiveSessionResult> {
+  private async executeUnsafe(command: SessionCommand, onPdfObtained?: () => number | undefined): Promise<ArcaLiveSessionResult> {
     switch (command.type) {
       case "status":
         return this.ok(await this.getState());
@@ -268,6 +308,9 @@ export class ArcaLiveSession {
       case "inputs":
         return this.ok(await this.getState(), { inputs: await this.inputs() });
 
+      case "resume-authentication":
+        return await this.resumeAuthentication();
+
       case "portal":
         await this.goPortal();
         return this.afterNavigationResult("Portal de Clave Fiscal abierto.");
@@ -287,12 +330,12 @@ export class ArcaLiveSession {
       }
 
       case "emit-prepared-invoice": {
-        const data = await this.emitPreparedInvoice(command.preparedInvoiceId, false);
+        const data = await this.emitPreparedInvoice(command.preparedInvoiceId, false, onPdfObtained);
         return this.ok(await this.getState(), data);
       }
 
       case "revalidate-prepared-invoice": {
-        const data = await this.emitPreparedInvoice(command.preparedInvoiceId, true);
+        const data = await this.emitPreparedInvoice(command.preparedInvoiceId, true, onPdfObtained);
         return this.ok(await this.getState(), data);
       }
 
@@ -307,7 +350,8 @@ export class ArcaLiveSession {
     await this.adoptNewestPage();
 
     if (await isCaptchaVisible(this.page)) {
-      return this.manualIntervention("ARCA esta solicitando captcha. Completalo manualmente en el navegador y reintenta el comando.");
+      this.authenticationAttempts.markCaptchaRequired();
+      return this.manualIntervention("ARCA está solicitando captcha. Completalo manualmente en el navegador y reintentá el comando.");
     }
 
     return this.ok(await this.getState(), { message });
@@ -329,6 +373,48 @@ export class ArcaLiveSession {
       message,
       state: await this.getState(),
     };
+  }
+
+  private async resumeAuthentication(): Promise<ArcaLiveSessionResult> {
+    if (this.options.visibilityMode !== "visible") {
+      throw new Error("resume-authentication solo se admite en una sesión visible.");
+    }
+    this.authenticationAttempts.assertResumeAllowed();
+
+    const initialState = await this.getState();
+    if (initialState.captchaVisible) {
+      return this.manualIntervention(new CaptchaRequiredError().message);
+    }
+    if (initialState.readyState === "portal") {
+      this.authenticationAttempts.markResumed();
+      await this.writeSessionEvent("authentication_resumed_manually", { state: initialState }).catch(() => undefined);
+      return this.ok(initialState, { message: "La sesión ya está autenticada; no se reenvió ningún formulario." });
+    }
+    if (initialState.readyState !== "auth") {
+      return this.manualIntervention("La pantalla visible no es el login oficial esperado. No se reenvió ningún formulario.");
+    }
+
+    try {
+      await continueArcaAccessIfRequested(this.page, this.options.credentials, {
+        strictSelectors: true,
+        interactive: true,
+        manualIntervention: false,
+      });
+    } catch (error) {
+      if (error instanceof InvalidArcaCredentialsError) this.authenticationAttempts.markRejected();
+      throw error;
+    }
+
+    const finalState = await this.getState();
+    if (finalState.captchaVisible) {
+      return this.manualIntervention(new CaptchaRequiredError().message);
+    }
+    if (finalState.readyState !== "portal") {
+      return this.manualIntervention("ARCA no confirmó el Portal de Clave Fiscal después de la reanudación explícita. No se hará otro intento.");
+    }
+    this.authenticationAttempts.markResumed();
+    await this.writeSessionEvent("authentication_resumed", { state: finalState }).catch(() => undefined);
+    return this.ok(finalState, { message: "Autenticación reanudada en la misma sesión visible." });
   }
 
   private async goPortal(): Promise<void> {
@@ -411,8 +497,8 @@ export class ArcaLiveSession {
   private async prepareInvoice(jobPath: string): Promise<{ message: string; capabilityId: string; preparedInvoiceId: string; expiresAt: string; summary: PreparedInvoiceSummary; screenshotPath: string }> {
     const { job, jobHash, capabilityId, preparedInvoiceId } = await measureArcaPerformance("prepare_preflight", async () => {
       const runtime = getRuntimePaths();
-      const privateJobPath = await resolvePrivateInvoiceJobPath(jobPath, runtime.privateJobs, runtime.root);
-      const loadedJob = await loadInvoiceJob(privateJobPath);
+      const privateJob = await readPrivateInvoiceJobFile(jobPath, runtime.privateJobs, runtime.root);
+      const loadedJob = parseInvoiceJobJson(privateJob.contents, privateJob.path);
       const capability = await requireInvoiceJobCapability(loadedJob, "prepare-invoice", {
         capabilityId: this.options.learnedCapability ?? this.options.revalidationCapability,
         requireHidden: this.options.visibilityMode === "production-hidden",
@@ -436,7 +522,7 @@ export class ArcaLiveSession {
       const flowContext: FlowContext = {
         strictSelectors: true,
         interactive: false,
-        manualIntervention: this.options.visibilityMode === "visible",
+        manualIntervention: false,
       };
       const evidence = await fillInvoice(this.page, job, flowContext);
       const summary = await measureArcaPerformance("prepare_summary_validation", async () => {
@@ -475,7 +561,11 @@ export class ArcaLiveSession {
       throw error;
     }
   }
-  private async emitPreparedInvoice(preparedInvoiceId: string, visibleRevalidation: boolean): Promise<{ message: string; operationId: string; summary: PreparedInvoiceSummary; pdfPath: string; metadataPath: string; pdfSha256: string; voucherNumber: string; cae: string; screenshotPath: string }> {
+  private async emitPreparedInvoice(
+    preparedInvoiceId: string,
+    visibleRevalidation: boolean,
+    onPdfObtained?: () => number | undefined,
+  ): Promise<{ message: string; operationId: string; summary: PreparedInvoiceSummary; pdfPath: string; metadataPath: string; pdfSha256: string; voucherNumber: string; cae: string; screenshotPath: string; timings?: { confirmationToPdfMs: number } }> {
     const candidate = this.preparedInvoices.current;
     assertOfficialArcaRcelUrl(this.page.url(), "la lectura del resumen preparado");
     const body = await this.page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
@@ -497,14 +587,17 @@ export class ArcaLiveSession {
       throw error;
     }
     let irreversibleStarted = false;
+    let firstClickAttempted = false;
+    let revalidationClaimed = false;
     let result: Awaited<ReturnType<typeof executeControlledEmission>> | undefined;
     let pdfReservation: PdfDestinationReservation | undefined;
+    let revalidationManifest: Awaited<ReturnType<typeof requireInvoiceJobVisibleRevalidation>> | undefined;
     try {
       if (visibleRevalidation) {
         if (!this.options.revalidationCapability || state.capabilityId !== this.options.revalidationCapability) {
           throw new Error("La preparación no pertenece a la capacidad habilitada para esta revalidación visible.");
         }
-        await requireInvoiceJobVisibleRevalidation(state.job, this.options.revalidationCapability);
+        revalidationManifest = await requireInvoiceJobVisibleRevalidation(state.job, this.options.revalidationCapability);
       } else {
         await requireInvoiceJobCapability(state.job, "emit-prepared-invoice", {
           capabilityId: state.capabilityId,
@@ -517,9 +610,23 @@ export class ArcaLiveSession {
       pdfReservation = await reservePrivatePdfDestination(stagingPdfTarget, runtime.downloads, runtime.root);
       result = await executeControlledEmission(this.page, {
         onIrreversible: async () => {
+          // El ledger se reserva antes de cualquier otro paso de la secuencia
+          // irreversible. Desde este punto, aun una caída abrupta se recupera
+          // como incertidumbre y jamás como una preparación reintentable.
           await this.ledger.claimEmission(state.operationId, preparedInvoiceId, state.jobHash);
           irreversibleStarted = true;
+          if (revalidationManifest) {
+            try {
+              await claimVisibleRevalidation(revalidationManifest, state.operationId, preparedInvoiceId);
+              revalidationClaimed = true;
+            } finally {
+              // Incluso una reserva incierta clausura esta sesión. Una nueva
+              // corrida solo podrá continuar si no quedó una atestación durable.
+              this.revalidationConsumed = true;
+            }
+          }
         },
+        onFirstClick: () => { firstClickAttempted = true; },
       });
       const screenshotPath = await this.screenshot();
       const stagingPdfPath = await this.savePrintPdf(pdfReservation.path, runtime.downloads, runtime.root, pdfReservation);
@@ -531,28 +638,38 @@ export class ArcaLiveSession {
         description: state.job.description,
         amountCents: state.job.amountCents,
       });
+      const confirmationToPdfMs = onPdfObtained?.();
       const pdfSha256 = await sha256File(stagingPdfPath);
       assertEmissionResultMatchesPdf(result, pdfEvidence);
       const voucherNumber = pdfEvidence.voucherNumber;
       const cae = pdfEvidence.cae;
-      const artifacts = await buildInvoiceArtifactPaths(state.job, {
+      const published = await publishInvoiceArtifactsForJob(stagingPdfPath, state.job, {
         cuit: state.summary.issuerCuit,
         name: state.summary.issuer,
-      }, { voucherNumber, cae, pdfSha256 }, state.jobHash);
-      const published = await publishInvoiceArtifacts(stagingPdfPath, artifacts, runtime.downloads, runtime.root);
+      }, { voucherNumber, cae, pdfSha256 }, state.jobHash, runtime.downloads, runtime.root);
       await this.ledger.markEmitted(state.operationId, preparedInvoiceId, state.jobHash, {
         voucherNumber,
         cae,
         pdfPath: published.pdfPath,
         metadataPath: published.metadataPath,
-        pdfSha256,
+        pdfSha256: published.pdfSha256,
       });
       this.preparedInvoices.invalidate();
-      return { message: "Factura emitida; PDF y metadatos archivados.", operationId: state.operationId, summary: state.summary, pdfPath: published.pdfPath, metadataPath: published.metadataPath, pdfSha256, voucherNumber, cae, screenshotPath };
+      return { message: "Factura emitida; PDF y metadatos archivados.", operationId: state.operationId, summary: state.summary, pdfPath: published.pdfPath, metadataPath: published.metadataPath, pdfSha256: published.pdfSha256, voucherNumber, cae, screenshotPath, ...(confirmationToPdfMs === undefined ? {} : { timings: { confirmationToPdfMs } }) };
     } catch (error) {
       const detail = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+      let canReturnToPreClick = irreversibleStarted && !firstClickAttempted;
+      if (canReturnToPreClick && revalidationManifest && revalidationClaimed) {
+        try {
+          await releaseVisibleRevalidationBeforeFirstClick(revalidationManifest, state.operationId, preparedInvoiceId);
+        } catch {
+          canReturnToPreClick = false;
+        }
+      }
       const transition = irreversibleStarted
-        ? this.ledger.markUnknown(state.operationId, preparedInvoiceId, state.jobHash, detail, result ? { voucherNumber: result.voucherNumber, cae: result.cae } : undefined)
+        ? canReturnToPreClick
+          ? this.ledger.markFailedBeforeFirstClick(state.operationId, preparedInvoiceId, state.jobHash, detail)
+          : this.ledger.markUnknown(state.operationId, preparedInvoiceId, state.jobHash, detail, result ? { voucherNumber: result.voucherNumber, cae: result.cae } : undefined)
         : this.ledger.markFailedBeforeEmit(state.operationId, preparedInvoiceId, state.jobHash, detail);
       await transition.catch(() => undefined);
       this.preparedInvoices.invalidate();
@@ -562,13 +679,14 @@ export class ArcaLiveSession {
     }
   }
 
-  private async invalidateActivePreparation(detail: string): Promise<void> {
+  private async invalidateActivePreparation(detail: string, recognizedPreClickInterruption = false): Promise<void> {
     const safeDetail = sanitizeErrorMessage(detail);
     await invalidatePreparationBeforeMutation(
       this.preparedInvoices,
       this.ledger,
       async () => await this.currentPageFingerprint(),
       safeDetail,
+      { recognizedPreClickInterruption },
     );
   }
 
@@ -583,7 +701,7 @@ export class ArcaLiveSession {
       this.page = await openComprobantesEnLinea(this.page, {
         strictSelectors: true,
         interactive: false,
-        manualIntervention: this.options.visibilityMode === "visible",
+        manualIntervention: false,
       });
       state = await this.getState();
     }
@@ -593,7 +711,7 @@ export class ArcaLiveSession {
         await selectRepresentedIssuer(this.page, this.options.credentials.cuit, this.options.credentials.displayName, {
           strictSelectors: true,
           interactive: false,
-          manualIntervention: this.options.visibilityMode === "visible",
+          manualIntervention: false,
         });
       });
       state = await this.getState();
@@ -737,54 +855,8 @@ export class ArcaLiveSession {
     await singleVisible(this.page.getByText(/comprobante generado/i), "estado Comprobante Generado");
     const reservation = existingReservation ?? await reservePrivatePdfDestination(outputPath, allowedRoot, trustedRoot);
     try {
-      const downloadedPath = await downloadGeneratedInvoicePdf(this.page, reservation);
-      if (downloadedPath) return downloadedPath;
-
-      const printPath = await this.page.evaluate(() => {
-        const html = document.documentElement.innerHTML;
-        const match = html.match(/imprimirComprobante\.do\?c=\d+/i);
-        return match?.[0] ?? null;
-      });
-
-      if (!printPath) {
-        throw new Error("ARCA no mostró un control de descarga ni una URL histórica de impresión del comprobante generado.");
-      }
-
-      const printUrl = new URL(printPath, this.page.url()).toString();
-      return await this.saveUrlPdf(printUrl, outputPath, allowedRoot, trustedRoot, reservation);
+      return await downloadGeneratedInvoicePdf(this.page, reservation);
     } finally {
-      await reservation.release();
-    }
-  }
-
-  private async saveUrlPdf(url: string, outputPath: string, allowedRoot: string, trustedRoot: string, existingReservation?: PdfDestinationReservation): Promise<string> {
-    const printUrl = new URL(url, this.page.url()).toString();
-    assertOfficialArcaLegacyPrintUrl(printUrl);
-    const reservation = existingReservation ?? await reservePrivatePdfDestination(outputPath, allowedRoot, trustedRoot);
-    let printPage: Page | undefined;
-    try {
-      printPage = await this.context.newPage();
-      const downloadPromise = printPage.waitForEvent("download", { timeout: 30000 }).catch(() => undefined);
-      let response;
-      try {
-        response = await printPage.goto(printUrl, { waitUntil: "networkidle" });
-      } catch (error) {
-        if (!(error instanceof Error) || !/download is starting/i.test(error.message)) throw error;
-      }
-      const download = await downloadPromise;
-      if (download) {
-        await download.saveAs(reservation.temporaryPath);
-        return await publishReservedPdf(reservation);
-      }
-      const contentType = response?.headers()["content-type"] ?? "";
-      if (response && /pdf/i.test(contentType)) {
-        await fs.writeFile(reservation.temporaryPath, await response.body(), { flag: "wx" });
-        return await publishReservedPdf(reservation);
-      }
-      await printPage.pdf({ path: reservation.temporaryPath, format: "A4", printBackground: true });
-      return await publishReservedPdf(reservation);
-    } finally {
-      await printPage?.close().catch(() => undefined);
       await reservation.release();
     }
   }
@@ -829,16 +901,29 @@ export class ArcaLiveSession {
       result: {
         ok: result.ok,
         status: result.status,
-        message: result.message,
-        state: result.state,
+        state: redactSessionStateForLog(result.state),
       },
     });
     await fs.appendFile(path.join(this.artifactDir, "commands.jsonl"), `${line}\n`);
   }
 
-  private async writeSessionEvent(event: string, data: unknown): Promise<void> {
-    await fs.appendFile(path.join(this.artifactDir, "events.jsonl"), `${JSON.stringify({ event, createdAt: new Date().toISOString(), data })}\n`);
+  private async writeSessionEvent(event: string, data: { state: ArcaLiveSessionState }): Promise<void> {
+    await fs.appendFile(path.join(this.artifactDir, "events.jsonl"), `${JSON.stringify({ event, createdAt: new Date().toISOString(), data: { state: redactSessionStateForLog(data.state) } })}\n`);
   }
+}
+
+export function redactSessionStateForLog(state: ArcaLiveSessionState): Pick<ArcaLiveSessionState,
+  "readyState" | "captchaVisible" | "pageCount" | "visibilityMode" | "learnedCapability" | "revalidationCapability" | "revalidationConsumed"
+> {
+  return {
+    readyState: state.readyState,
+    captchaVisible: state.captchaVisible,
+    pageCount: state.pageCount,
+    visibilityMode: state.visibilityMode,
+    learnedCapability: state.learnedCapability,
+    revalidationCapability: state.revalidationCapability,
+    revalidationConsumed: state.revalidationConsumed,
+  };
 }
 
 async function singleVisible(locator: Locator, description: string): Promise<Locator> {
@@ -896,10 +981,6 @@ function timestampForPath(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-function sanitizePathPart(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]+/g, "_");
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -939,6 +1020,15 @@ export function buildPreparedInvoiceSummary(
     [identity.sessionIssuerKey, job.issuerKey, identity.credentialCuit],
   );
   const currency = requireVerifiedCurrency(job, evidence);
+  if (!evidence.quantity || !evidence.unitPrice || !evidence.subtotal || !evidence.total) {
+    throw new Error("No existe evidencia visible completa de cantidad, precio unitario, subtotal y total.");
+  }
+  if (!/^1(?:[.,]0+)?$/u.test(evidence.quantity.trim())
+    || !moneyEvidenceMatches(evidence.unitPrice, job.amountCents)
+    || !moneyEvidenceMatches(evidence.subtotal, job.amountCents)
+    || !moneyEvidenceMatches(evidence.total, job.amountCents)) {
+    throw new Error("La evidencia visible de cantidad, precio unitario, subtotal o total no coincide con el job.");
+  }
   const missingExpectedSignals = missingExpectedSummarySignals(bodyText, job, evidence);
 
   return {
@@ -960,6 +1050,10 @@ export function buildPreparedInvoiceSummary(
     recipientCommercialAddress: evidence.recipientCommercialAddress,
     saleCondition: job.saleCondition,
     description: evidence.description ?? job.description,
+    quantity: evidence.quantity ?? "",
+    unitPrice: formatArcaMoney(job.amount),
+    subtotal: formatArcaMoney(job.amount),
+    total: formatArcaMoney(job.amount),
     amount: formatArcaMoney(job.amount),
     rawContainsExpected: missingExpectedSignals.length === 0,
     missingExpectedSignals,
@@ -986,6 +1080,10 @@ function validatePreparedSummary(summary: PreparedInvoiceSummary, job: ResolvedI
     ["condición frente al IVA", summary.recipientVatCondition],
     ["domicilio comercial del receptor", summary.recipientCommercialAddress],
     ["descripción", summary.description],
+    ["cantidad", summary.quantity],
+    ["precio unitario", summary.unitPrice],
+    ["subtotal", summary.subtotal],
+    ["total", summary.total],
   ] as const;
   const missingControlEvidence = requiredControlEvidence.filter(([, value]) => !value?.trim()).map(([label]) => label);
   if (missingControlEvidence.length > 0) {
@@ -1005,7 +1103,11 @@ function validatePreparedSummary(summary: PreparedInvoiceSummary, job: ResolvedI
   if (job.recipientCommercialAddress && !commercialAddressesMatch(summary.recipientCommercialAddress ?? "", job.recipientCommercialAddress)) mismatched.push("domicilio comercial");
   if (!saleConditionMatches(summary.saleCondition, job.saleCondition)) mismatched.push("condición de venta");
   if (!sameSummaryText(summary.description, job.description)) mismatched.push("descripción");
-  if (!sameSummaryText(summary.amount, formatArcaMoney(job.amount))) mismatched.push("importe total");
+  if (!/^1(?:[.,]0+)?$/u.test(summary.quantity.trim())) mismatched.push("cantidad");
+  if (!sameSummaryText(summary.unitPrice, formatArcaMoney(job.amount))) mismatched.push("precio unitario");
+  if (!sameSummaryText(summary.subtotal, formatArcaMoney(job.amount))) mismatched.push("subtotal");
+  if (!sameSummaryText(summary.total, formatArcaMoney(job.amount))) mismatched.push("importe total");
+  if (!sameSummaryText(summary.amount, summary.total)) mismatched.push("alias de importe total");
   if (mismatched.length > 0) {
     throw new Error(`El resumen preparado difiere del job en: ${mismatched.join(", ")}.`);
   }
@@ -1167,6 +1269,17 @@ function formatArcaMoney(amount: number): string {
   });
 }
 
+function moneyEvidenceMatches(value: string, expectedCents: number): boolean {
+  const compact = value.replace(/\s|\$/gu, "").replace(/[^0-9,.-]/gu, "");
+  if (!/\d/u.test(compact) || compact.startsWith("-")) return false;
+  const separator = Math.max(compact.lastIndexOf("."), compact.lastIndexOf(","));
+  const hasDecimals = separator >= 0 && compact.length - separator - 1 === 2;
+  const whole = (hasDecimals ? compact.slice(0, separator) : compact).replace(/\D/gu, "") || "0";
+  const fraction = hasDecimals ? compact.slice(separator + 1).replace(/\D/gu, "") : "00";
+  const cents = Number(whole) * 100 + Number(fraction);
+  return Number.isSafeInteger(cents) && cents === expectedCents;
+}
+
 function normalizeForMatch(value: string): string {
   return value
     .normalize("NFD")
@@ -1189,4 +1302,16 @@ function assertStableInspectablePage(page: Page, expectedUrl: string, action: st
 
 export function invalidatesPreparation(type: SessionCommand["type"]): boolean {
   return !["status", "snapshot", "screenshot", "emit-prepared-invoice", "revalidate-prepared-invoice"].includes(type);
+}
+
+function isReadOnlyCommand(command: SessionCommand): boolean {
+  return ["status", "snapshot", "screenshot", "pages", "select-options", "inputs"].includes(command.type);
+}
+
+function isIrreversibleCommand(command: SessionCommand): boolean {
+  return command.type === "emit-prepared-invoice" || command.type === "revalidate-prepared-invoice";
+}
+
+function isRecognizedPreClickInterruption(state: ArcaLiveSessionState["readyState"] | undefined): boolean {
+  return state !== undefined && ["auth", "captcha", "expired", "forbidden"].includes(state);
 }

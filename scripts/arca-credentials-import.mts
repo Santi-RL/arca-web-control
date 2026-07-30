@@ -11,7 +11,7 @@ if (mode !== "--dry-run" && !(mode === "--write" && confirmation === "IMPORTAR_C
   throw new Error("Uso: arca:credentials:import-csv -- --dry-run | --write IMPORTAR_CREDENCIALES");
 }
 
-const importRoot = path.join(getRuntimePaths().root, "private-import");
+const importRoot = getRuntimePaths().privateImport;
 await ensurePrivateDirectory(importRoot);
 console.log(`IMPORT_FOLDER=${importRoot}`);
 const terminal = readline.createInterface({ input, output });

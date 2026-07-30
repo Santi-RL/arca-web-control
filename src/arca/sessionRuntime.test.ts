@@ -8,12 +8,15 @@ import { resolveSessionRuntime } from "./sessionRuntime.js";
 
 const runtime: RuntimePaths = {
   root: "runtime",
+  config: "config",
   profiles: "profiles",
   issuers: "issuers",
   sessions: "sessions",
   learning: "learning",
   ledger: "ledger",
   privateJobs: "jobs",
+  privateImport: "private-import",
+  guided: "guided",
   logs: "logs",
   downloads: "downloads",
 };
@@ -119,7 +122,7 @@ test("la atestación ocurre antes de credenciales y Chrome", async () => {
   const worker = await fs.readFile(path.resolve("scripts", "arca-session.mts"), "utf8");
   const runtimeResolution = worker.indexOf("await resolveSessionRuntime(");
   const config = worker.indexOf("loadRuntimeConfig()");
-  const credentials = worker.indexOf("loadCredentialsAsync(args.issuer)");
+  const credentials = worker.indexOf("loadCredentialsAsync(args.issuer, expectedCredentialProviderFingerprint)");
   const sessionModule = worker.indexOf('import("../src/arca/liveSession.js")');
   const browser = worker.indexOf("ArcaLiveSession.create(");
   assert.ok(runtimeResolution >= 0 && config > runtimeResolution && credentials > runtimeResolution && sessionModule > runtimeResolution && browser > credentials && browser > sessionModule);
@@ -140,4 +143,20 @@ test("la atestación ocurre antes de credenciales y Chrome", async () => {
   assert.ok(publishStage >= 0 && currentWrite > publishStage && publishedNotification > currentWrite);
   assert.match(launcher, /retrySessionStatus/);
   assert.match(launcher, /AbortSignal\.timeout\(1000\)/);
+});
+
+test("los entrypoints de comandos exigen el marcador antes de toda mutación", async () => {
+  const cli = await fs.readFile(path.resolve("scripts", "arca-session-cmd.mts"), "utf8");
+  assert.match(cli, /command\.type !== "status"\) await useActiveSessionRuntimeLayout\(runtime\)/);
+
+  const mcp = await fs.readFile(path.resolve("scripts", "arca-mcp.mts"), "utf8");
+  const guard = mcp.indexOf("await useActiveSessionRuntimeLayout(runtime)");
+  const post = mcp.indexOf('sessionRequest("POST", "/command"', guard);
+  assert.ok(guard >= 0 && post > guard);
+  const learningGuard = mcp.indexOf("await useActiveSessionRuntimeLayout(runtime)", guard + 1);
+  const learningPost = mcp.indexOf("buildLearningControlUrl(current)", learningGuard);
+  assert.ok(learningGuard > guard && learningPost > learningGuard);
+
+  const recovery = await fs.readFile(path.resolve("scripts", "arca-invoice-recover-pdf.mts"), "utf8");
+  assert.match(recovery, /await ensureRuntimeLayout\(getRuntimePaths\(\)\)/);
 });

@@ -20,10 +20,45 @@ test("una reserva impide sobrescribir un PDF existente", async () => {
   try {
     const destination = path.join(directory, "factura.pdf");
     const reservation = await reservePrivatePdfDestination(destination, directory, directory);
-    await assert.rejects(() => reservePrivatePdfDestination(destination, directory, directory), /reservado/);
+    await assert.rejects(() => reservePrivatePdfDestination(destination, directory, directory), /en uso/);
     await reservation.release();
     await fs.writeFile(destination, "pdf");
     await assert.rejects(() => reservePrivatePdfDestination(destination, directory, directory), /no se sobrescribirá/);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("un lock de archivo legado no bloquea la reserva del sistema operativo", async () => {
+  const directory = await makeCanonicalTemporaryDirectory("arca-download-orphan-");
+  try {
+    const destination = path.join(directory, "factura.pdf");
+    const ownerToken = "00000000-0000-4000-8000-000000000001";
+    const temporaryPath = path.join(directory, `.factura.${ownerToken}.tmp.pdf`);
+    await fs.writeFile(`${destination}.lock`, JSON.stringify({
+      pid: 2_147_483_647,
+      ownerToken,
+      destination,
+      temporaryPath,
+      claimedAt: new Date().toISOString(),
+    }));
+    const reservation = await reservePrivatePdfDestination(destination, directory, directory);
+    assert.notEqual(reservation.temporaryPath, temporaryPath);
+    await reservation.release();
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("un temporal huérfano bloquea otra reserva hasta reconciliarlo", async () => {
+  const directory = await makeCanonicalTemporaryDirectory("arca-download-orphan-temp-");
+  try {
+    const destination = path.join(directory, "factura.pdf");
+    await fs.writeFile(path.join(directory, ".factura.00000000-0000-4000-8000-000000000001.tmp.pdf"), "PDF parcial");
+    await assert.rejects(
+      () => reservePrivatePdfDestination(destination, directory, directory),
+      /temporal huérfano.*reconciliar/i,
+    );
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

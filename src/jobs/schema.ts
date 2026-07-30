@@ -69,9 +69,13 @@ export const invoiceJobV2Schema = z.object({
 
 export async function loadInvoiceJob(jobPath: string, downloadsRoot?: string): Promise<ResolvedInvoiceJob> {
   const absolutePath = path.resolve(jobPath);
-  const rawValue = JSON.parse(await fs.readFile(absolutePath, "utf8")) as { schemaVersion?: unknown };
+  return parseInvoiceJobJson(await fs.readFile(absolutePath, "utf8"), absolutePath, downloadsRoot);
+}
+
+export function parseInvoiceJobJson(raw: string, sourceLabel = "job privado", downloadsRoot?: string): ResolvedInvoiceJob {
+  const rawValue = JSON.parse(raw) as { schemaVersion?: unknown };
   if (rawValue.schemaVersion !== 2) {
-    throw new Error(`El job ${absolutePath} usa schema v1 o no declara versión. Ejecutá arca:job:migrate antes de usarlo.`);
+    throw new Error(`El job ${sourceLabel} usa schema v1 o no declara versión. Ejecutá arca:job:migrate antes de usarlo.`);
   }
   const parsed = invoiceJobV2Schema.parse(rawValue) satisfies InvoiceJob;
   const amountCents = decimalToCents(parsed.amount);

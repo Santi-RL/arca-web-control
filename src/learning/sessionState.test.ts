@@ -20,6 +20,8 @@ const validState = {
 test("acepta un estado de aprendizaje canónico y fija la URL a loopback", () => {
   const parsed = parseCurrentLearningState(validState);
   assert.equal(buildLearningControlUrl(parsed), "http://127.0.0.1:32123");
+  assert.equal(parsed.readyState, "learning");
+  assert.equal(parseCurrentLearningState({ ...validState, readyState: "captcha" }).readyState, "captcha");
 });
 
 test("rechaza host remoto, puerto inválido y token débil", () => {
@@ -33,4 +35,5 @@ test("rechaza campos adicionales y metadatos incoherentes", () => {
   assert.equal(currentLearningStateSchema.safeParse({ ...validState, extra: true }).success, false);
   assert.equal(currentLearningStateSchema.safeParse({ ...validState, issuerKey: "20000000002" }).success, false);
   assert.equal(currentLearningStateSchema.safeParse({ ...validState, directory: "relative" }).success, false);
+  assert.equal(currentLearningStateSchema.safeParse({ ...validState, readyState: "otro" }).success, false);
 });

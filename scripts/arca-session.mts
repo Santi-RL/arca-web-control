@@ -13,6 +13,8 @@ import { measureArcaPerformance } from "../src/arca/performance.js";
 import { sanitizeErrorMessage } from "../src/arca/publicErrors.js";
 import { resolveSessionRuntime } from "../src/arca/sessionRuntime.js";
 import { readCurrentSessionStateIfExists, writeCurrentSessionState } from "../src/arca/sessionState.js";
+import { assertCredentialProviderFingerprint, credentialProviderFingerprint, sessionCredentialProviderFingerprintEnv } from "../src/config/credentialProvider.js";
+import { SessionCommandGate } from "../src/arca/sessionCommandGate.js";
 
 type Args = { issuer: string; visibilityMode: SessionVisibilityMode; learnedCapability?: string; revalidationCapability?: string };
 let shutdownRequested = false;
@@ -26,6 +28,8 @@ let shutdownPromise: Promise<void> | undefined;
 let session: ArcaLiveSessionInstance | undefined;
 let server: http.Server | undefined;
 let releaseLock: (() => Promise<void>) | undefined;
+const commandGate = new SessionCommandGate();
+let lastKnownState: Awaited<ReturnType<ArcaLiveSessionInstance["getState"]>> | undefined;
 
 process.once("SIGINT", requestShutdown);
 process.once("SIGTERM", requestShutdown);
@@ -44,10 +48,16 @@ if (launcherHandoffRequired && !process.connected) requestShutdown();
 
 const args = parseArgs(process.argv.slice(2));
 const runtime = await measureArcaPerformance("worker_runtime", async () => await resolveSessionRuntime(launcherHandoffRequired, process, startupAbort.signal));
+const expectedCredentialProviderFingerprint = launcherHandoffRequired
+  ? process.env[sessionCredentialProviderFingerprintEnv]
+  : credentialProviderFingerprint(runtime);
+assertCredentialProviderFingerprint(runtime, expectedCredentialProviderFingerprint);
 const config = loadRuntimeConfig();
 const liveSessionModulePromise = measureArcaPerformance("worker_session_module", async () => await import("../src/arca/liveSession.js"));
-const credentialsPromise = measureArcaPerformance("worker_credentials", async () => await loadCredentialsAsync(args.issuer));
+const credentialsPromise = measureArcaPerformance("worker_credentials", async () => await loadCredentialsAsync(args.issuer, expectedCredentialProviderFingerprint));
 const [{ ArcaLiveSession }, credentials] = await Promise.all([liveSessionModulePromise, credentialsPromise]);
+assertCredentialProviderFingerprint(runtime, expectedCredentialProviderFingerprint);
+if (launcherHandoffRequired) delete process.env[sessionCredentialProviderFingerprintEnv];
 const capability = args.visibilityMode === "production-hidden" ? await requireHiddenCapability(args.learnedCapability || "") : undefined;
 if (args.revalidationCapability) await requireVisibleInvoiceRevalidationCapability(args.revalidationCapability);
 const token = randomBytes(32).toString("hex");
@@ -79,18 +89,34 @@ try {
       const activeSession = session;
       if (!activeSession) return sendJson(response, 503, { ok: false, status: "not_ready" });
       if (!isAuthorizedSessionRequest(request.headers, token)) return sendJson(response, 401, { ok: false, status: "unauthorized" });
-      if (request.method === "GET" && request.url === "/status") return sendJson(response, 200, { ok: true, status: "ok", state: await activeSession.getState() });
       if (request.method === "POST" && request.url === "/stop") {
+        const releaseStop = commandGate.tryAcquire();
+        if (!releaseStop) return sendJson(response, 409, { ok: false, status: "busy", message: "La sesión ARCA está procesando un comando; no se inició el cierre." });
         sendJson(response, 200, { ok: true, status: "stopping" });
-        void shutdown();
+        void shutdown().finally(() => releaseStop());
         return;
       }
-      if (request.method === "POST" && request.url === "/command") {
-        const body = await readJsonBody(request);
-        const command = sessionCommandSchema.parse((body as { command?: unknown }).command ?? body);
-        const result = await activeSession.execute(command);
-        await writeCurrent();
-        return sendJson(response, result.ok ? 200 : result.status === "needs_manual_intervention" ? 409 : 400, result);
+      if ((request.method === "GET" && request.url === "/status") || (request.method === "POST" && request.url === "/command")) {
+        const releaseCommand = commandGate.tryAcquire();
+        if (!releaseCommand) {
+          if (request.method === "GET" && lastKnownState) {
+            return sendJson(response, 200, { ok: true, status: "busy", busy: true, state: lastKnownState });
+          }
+          return sendJson(response, 409, { ok: false, status: "busy", message: "La sesión ARCA ya está procesando otro comando; no se inició esta solicitud." });
+        }
+        try {
+          if (request.method === "GET") {
+            return sendJson(response, 200, { ok: true, status: "ok", state: await activeSession.getState() });
+          }
+          const body = await readJsonBody(request);
+          const command = sessionCommandSchema.parse((body as { command?: unknown }).command ?? body);
+          const result = await activeSession.execute(command);
+          lastKnownState = result.state;
+          await writeCurrent();
+          return sendJson(response, result.ok ? 200 : result.status === "needs_manual_intervention" ? 409 : 400, result);
+        } finally {
+          releaseCommand();
+        }
       }
       return sendJson(response, 404, { ok: false, status: "not_found" });
     } catch (error) {
@@ -110,6 +136,7 @@ try {
       process.exit(0);
     }
     const state = await activeSession.getState();
+    lastKnownState = state;
     console.log(`READY_URL=${state.url}`);
     console.log(`READY_STATE=${state.readyState}`);
     console.log(`SESSION_VISIBILITY=${state.visibilityMode}`);
@@ -128,7 +155,9 @@ async function writeCurrent(): Promise<void> {
   if (!activeServer || !activeSession) return;
   const address = activeServer.address();
   if (!address || typeof address === "string") return;
-  await writeCurrentSessionState(currentPath, { version: 2, pid: process.pid, host: "127.0.0.1", port: address.port, token, issuerKey: credentials.issuerKey, issuerName: credentials.displayName, visibilityMode: args.visibilityMode, learnedCapability: args.learnedCapability, revalidationCapability: args.revalidationCapability, artifactDir: activeSession.artifactDir, startedAt, handoffComplete: launcherHandoffComplete, state: await activeSession.getState() });
+  const state = await activeSession.getState();
+  lastKnownState = state;
+  await writeCurrentSessionState(currentPath, { version: 2, pid: process.pid, host: "127.0.0.1", port: address.port, token, issuerKey: credentials.issuerKey, issuerName: credentials.displayName, visibilityMode: args.visibilityMode, learnedCapability: args.learnedCapability, revalidationCapability: args.revalidationCapability, artifactDir: activeSession.artifactDir, startedAt, handoffComplete: launcherHandoffComplete, state });
 }
 
 async function completeLauncherHandoff(): Promise<void> {

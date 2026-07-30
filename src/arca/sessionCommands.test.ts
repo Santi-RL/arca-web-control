@@ -8,8 +8,8 @@ import {
   sessionCommandSchema,
 } from "./sessionCommands.js";
 
-test("parseSessionCommandArgs interpreta los comandos de lectura", () => {
-  for (const command of ["status", "snapshot", "screenshot", "pages", "inputs", "select-options", "portal"] as const) {
+test("parseSessionCommandArgs interpreta los comandos sin argumentos", () => {
+  for (const command of ["status", "snapshot", "screenshot", "pages", "inputs", "select-options", "resume-authentication", "portal"] as const) {
     assert.deepEqual(parseSessionCommandArgs([command]), { type: command });
   }
 });
@@ -67,6 +67,7 @@ test("sessionCommandSchema valida la ruta preparada y rechaza payloads no permit
   assert.equal(sessionCommandSchema.parse({ type: "pages" }).type, "pages");
   assert.equal(sessionCommandSchema.parse({ type: "use-page", index: 1 }).type, "use-page");
   assert.equal(sessionCommandSchema.parse({ type: "inputs" }).type, "inputs");
+  assert.equal(sessionCommandSchema.parse({ type: "resume-authentication" }).type, "resume-authentication");
   assert.equal(sessionCommandSchema.parse({ type: "prepare-invoice", jobPath: "jobs/factura.json" }).type, "prepare-invoice");
   assert.equal(sessionCommandSchema.parse({ type: "emit-prepared-invoice", preparedInvoiceId: "00000000-0000-4000-8000-000000000000", confirmation: "EMITIR" }).type, "emit-prepared-invoice");
   assert.equal(sessionCommandSchema.parse({ type: "revalidate-prepared-invoice", preparedInvoiceId: "00000000-0000-4000-8000-000000000000", confirmation: "EMITIR" }).type, "revalidate-prepared-invoice");
@@ -88,6 +89,9 @@ test("la autorización local acepta solo tokens coincidentes", () => {
 
 test("redactCommandForLog conserva únicamente comandos que no reciben secretos", () => {
   assert.deepEqual(redactCommandForLog({ type: "status" }), { type: "status" });
+  assert.deepEqual(redactCommandForLog({ type: "select-represented", text: "Identidad fiscal ficticia" }), { type: "select-represented" });
+  assert.deepEqual(redactCommandForLog({ type: "prepare-invoice", jobPath: "invoice-handle-ficticio.json" }), { type: "prepare-invoice" });
+  assert.deepEqual(redactCommandForLog({ type: "revalidate-prepared-invoice", preparedInvoiceId: "00000000-0000-4000-8000-000000000000", confirmation: "EMITIR" }), { type: "revalidate-prepared-invoice" });
 });
 
 test("emit-prepared-invoice requiere confirmación exacta EMITIR", () => {
@@ -110,6 +114,23 @@ test("revalidate-prepared-invoice requiere confirmación exacta y una sesión vi
   }), /sesión visible/i);
 });
 
+test("una sesión de revalidación consumida solo admite lecturas y nunca una segunda preparación o emisión", () => {
+  const policy = {
+    visibilityMode: "visible" as const,
+    revalidationCapability: "invoice-services-single-item" as const,
+    revalidationConsumed: true,
+  };
+  assert.doesNotThrow(() => assertCommandAllowedInSessionMode(parseSessionCommandArgs(["status"]), policy));
+  assert.throws(
+    () => assertCommandAllowedInSessionMode(parseSessionCommandArgs(["prepare-invoice", "job.json"]), policy),
+    /ya fue consumida/i,
+  );
+  assert.throws(
+    () => assertCommandAllowedInSessionMode(parseSessionCommandArgs(["revalidate-prepared-invoice", "00000000-0000-4000-8000-000000000000", "EMITIR"]), policy),
+    /ya fue consumida/i,
+  );
+});
+
 test("production-hidden solo permite los comandos declarados por la capacidad", () => {
   assert.doesNotThrow(() => assertCommandAllowedInSessionMode(parseSessionCommandArgs(["status"]), {
     visibilityMode: "production-hidden",
@@ -122,6 +143,11 @@ test("production-hidden solo permite los comandos declarados por la capacidad", 
     allowedCommands: ["status", "prepare-invoice", "emit-prepared-invoice"],
   }));
   assert.throws(() => assertCommandAllowedInSessionMode(parseSessionCommandArgs(["open-service", "Monotributo"]), {
+    visibilityMode: "production-hidden",
+    learnedCapability: "invoice-services-single-item",
+    allowedCommands: ["status", "prepare-invoice", "emit-prepared-invoice"],
+  }), /no esta permitido/);
+  assert.throws(() => assertCommandAllowedInSessionMode(parseSessionCommandArgs(["resume-authentication"]), {
     visibilityMode: "production-hidden",
     learnedCapability: "invoice-services-single-item",
     allowedCommands: ["status", "prepare-invoice", "emit-prepared-invoice"],

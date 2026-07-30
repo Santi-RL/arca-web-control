@@ -35,16 +35,33 @@ export type ArcaPerformanceStage =
   | "prepare_screen_summary"
   | "prepare_summary_validation"
   | "prepare_state_fingerprint"
-  | "prepare_screenshot";
+  | "prepare_screenshot"
+  | "chat_login_to_summary"
+  | "emission_confirmation_to_pdf";
+
+export type ArcaPerformanceOutcome = "ok" | "failed";
+
+export function startArcaPerformance(stage: ArcaPerformanceStage): (outcome?: ArcaPerformanceOutcome) => number {
+  const startedAt = performance.now();
+  let completedDuration: number | undefined;
+  return (outcome: ArcaPerformanceOutcome = "ok") => {
+    if (completedDuration !== undefined) return completedDuration;
+    completedDuration = Math.max(0, Math.round(performance.now() - startedAt));
+    if (process.env.ARCA_PERF_TRACE === "1") {
+      console.error(`ARCA_PERF stage=${stage} duration_ms=${completedDuration} outcome=${outcome}`);
+    }
+    return completedDuration;
+  };
+}
 
 export async function measureArcaPerformance<T>(stage: ArcaPerformanceStage, action: () => Promise<T>): Promise<T> {
-  const startedAt = performance.now();
+  const finish = startArcaPerformance(stage);
+  let outcome: ArcaPerformanceOutcome = "failed";
   try {
-    return await action();
+    const result = await action();
+    outcome = "ok";
+    return result;
   } finally {
-    if (process.env.ARCA_PERF_TRACE === "1") {
-      const durationMs = Math.round(performance.now() - startedAt);
-      console.log(`ARCA_PERF stage=${stage} duration_ms=${durationMs}`);
-    }
+    finish(outcome);
   }
 }

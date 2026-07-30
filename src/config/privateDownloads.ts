@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensurePrivateDirectory, getRuntimePaths } from "./runtimePaths.js";
+import { acquireLocalOsMutex } from "../io/osMutex.js";
 
 export type PdfDestinationReservation = {
   path: string;
@@ -35,36 +36,22 @@ export async function reservePrivatePdfDestination(value: string, allowedRoot: s
   const canonicalParent = await prepareAndValidateParent(parent, allowedRoot, trustedRoot);
   const resolved = path.join(canonicalParent, path.basename(lexicalPath));
   const ownerToken = randomUUID();
-  const lockPath = `${resolved}.lock`;
   const temporaryPath = path.join(canonicalParent, `.${path.basename(resolved, ".pdf")}.${ownerToken}.tmp.pdf`);
-  let handle: fs.FileHandle;
-  try {
-    handle = await fs.open(lockPath, "wx");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "EEXIST") {
-      throw new Error(`El destino PDF está reservado por otra operación: ${resolved}`);
-    }
-    throw error;
-  }
-  try {
-    await handle.writeFile(JSON.stringify({ pid: process.pid, ownerToken, destination: resolved }));
-  } catch (error) {
-    await handle.close().catch(() => undefined);
-    await fs.rm(lockPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
+  const releaseMutex = await acquireLocalOsMutex(`pdf-destination\0${resolved}`, "el destino PDF");
   let released = false;
   let keepTemporary = false;
   const preserveTemporary = () => { keepTemporary = true; };
   const release = async () => {
     if (released) return;
     released = true;
-    await handle.close().catch(() => undefined);
     if (!keepTemporary) await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-    const current = await fs.readFile(lockPath, "utf8").then(JSON.parse).catch(() => undefined) as { ownerToken?: string } | undefined;
-    if (current?.ownerToken === ownerToken) await fs.rm(lockPath, { force: true }).catch(() => undefined);
+    await releaseMutex();
   };
   try {
+    const orphanedTemporary = (await fs.readdir(canonicalParent)).some((name) =>
+      name.startsWith(`.${path.basename(resolved, ".pdf")}.`) && name.endsWith(".tmp.pdf"),
+    );
+    if (orphanedTemporary) throw new Error("El destino PDF conserva un temporal huérfano que debe reconciliarse antes de continuar.");
     await fs.access(resolved);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return { path: resolved, temporaryPath, release, preserveTemporary };
@@ -72,8 +59,9 @@ export async function reservePrivatePdfDestination(value: string, allowedRoot: s
     throw error;
   }
   await release();
-  throw new Error(`El destino PDF ya existe y no se sobrescribirá: ${resolved}`);
+  throw new Error("El destino PDF ya existe y no se sobrescribirá.");
 }
+
 
 export async function publishReservedPdf(reservation: PdfDestinationReservation): Promise<string> {
   try {

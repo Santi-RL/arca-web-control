@@ -1,43 +1,53 @@
 ---
 name: arca-web-control
-description: Operar de forma experimental y supervisada la web de ARCA en Windows mediante el CLI Playwright de este proyecto. Usar para login visible, aprendizaje local de operaciones nuevas y preparación hasta el resumen de una Factura C de Servicios de un ítem. La emisión permanece deshabilitada hasta revalidación visible. Tratar cualquier otra variante como aprendizaje visible, sin ejecutar acciones irreversibles.
+description: Controlar de forma conversacional, rápida y supervisada la web de ARCA en Windows mediante el motor Playwright de este proyecto. Usar para recibir datos por chat, iniciar o reutilizar Chrome visible, preparar hasta el resumen una Factura C de Servicios de un ítem y aprender variantes nuevas. Mantener toda acción irreversible separada y sujeta a confirmación humana exacta.
 ---
 
 # ARCA Web Control
 
-## Preparación obligatoria
+## Preparación
 
-1. Leer `references/runtime.md`, `references/capabilities.md` y `references/commands.md`.
-2. Leer `docs/estado-y-roadmap.md`, `docs/operacion-chrome.md`, `docs/protocolo-aprendizaje-operativo.md` y `docs/capacidades.md` antes de operar.
-3. Para una factura, leer también `references/job-v2.md`.
-4. Ejecutar únicamente desde la raíz del repositorio y usar comandos versionados.
-5. Clasificar el pedido como conocido, variante, nuevo o irreversible.
-6. No recibir claves fiscales, cookies, tokens, perfiles ni artefactos crudos por chat o argumentos.
-7. Tratar el CUIT como identidad única del contribuyente. El nombre es una etiqueta no única; usarlo como selector solo si la resolución devuelve exactamente una coincidencia.
+1. Para una operación conocida, leer `references/runtime.md`, `references/credentials.md`, `references/capabilities.md` y `references/job-v2.md`. Consultar `references/commands.md` solo si hace falta una primitiva de diagnóstico.
+2. Leer la documentación de desarrollo completa únicamente al cambiar código, aprender una variante o promover una capacidad; no ejecutar validaciones de repositorio antes de cada factura rutinaria.
+3. Ejecutar desde la raíz del repositorio y clasificar el pedido como conocido, variante, nuevo o irreversible.
+4. Tratar el CUIT como identidad única. Un nombre puede usarse si el proveedor devuelve exactamente un contribuyente; ante ambigüedad, pedir CUIT.
+5. Respetar el proveedor elegido por el usuario. No exigir el Administrador de credenciales de Windows, no repetir una clave en la respuesta y no trasladarla a argumentos, logs, Git o artefactos fiscales.
 
 ## Operación
 
-- Para login conversacional visible, ejecutar `arca:session:start`, verificar `READY_STATE=portal` y retomar la misma sesión con `arca:session:cmd`.
+- Para una factura cuyos datos llegan por chat, generar un UUID privado `intentId` para esa solicitud y usar una sola invocación a `arca:invoice:prepare-chat` con JSON por `stdin`. Reutilizar ese UUID únicamente al reconstruir o reintentar la misma intención; una factura nueva, aunque tenga datos idénticos, recibe otro. Esta ruta valida y normaliza datos, resuelve el emisor una vez, crea o reutiliza el mismo job idempotente, inicia o reutiliza Chrome visible y devuelve el resumen; no copiar handles ni `intentId` internos en la conversación.
+- Usar `arca:session:start`, `arca:job:create` y `arca:session:cmd` como primitivas de diagnóstico o recuperación, no como preámbulo obligatorio del flujo conversacional normal.
 - Navegar incrementalmente desde la pantalla actual. No reiniciar, volver al portal ni abrir una URL directa salvo pedido explícito.
 - Para una capacidad nueva o variante, usar `arca:learn:start`; comenzar el registro después del login y detenerse antes de toda acción irreversible.
 - Mantener eventos, notas, capturas y `candidate.json` exclusivamente en `%LOCALAPPDATA%\ManejoARCA\learning`. Nunca incorporarlos directamente a Git ni adjuntarlos a un issue o PR.
 - En aprendizaje híbrido, ejecutar `inspect` antes de cada mutación y usar su `inspectionId` de un solo uso con `click-exact`, `select-exact`, `fill-input`, `check-exact` o `press`. Si hay varias pestañas ARCA, `inspect <índice-pestaña>` exige elegir una explícitamente y liga la inspección a esa página. Ignorar y no registrar pestañas de otros orígenes. Solo mutar pantallas ARCA conocidas previas al resumen. Las pantallas nuevas requieren interacción manual y los valores de `fill-input` llegan por stdin, nunca por argumentos.
 - Si aparece captcha, selector ambiguo, control inesperado o pantalla no documentada, detenerse y pedir intervención humana.
-- Ante `403 Forbidden` o `TU SESIÓN HA EXPIRADO`, no reenviar el formulario: finalizar el tramo, autenticar nuevamente y reconstruir el borrador.
+- Si una sesión visible queda pausada por captcha, no reenviar el login en el mismo aviso. Después de que el usuario confirme que intervino, ejecutar explícitamente `arca:session:cmd -- resume-authentication` en una sesión operativa o `arca:learn:cmd -- resume-authentication` en un aprendizaje, siempre sobre el mismo Chrome. Si el captcha continúa o la pantalla no es el login oficial esperado, volver a detenerse. Una credencial rechazada clausura toda reanudación posterior y detiene ese worker sin un segundo intento.
+- Ante `ARCA_INVALID_CREDENTIALS`, informar y detenerse sin un segundo intento.
+- Ante `403 Forbidden` o `TU SESIÓN HA EXPIRADO` antes del primer clic irreversible, no reenviar el formulario: finalizar el tramo, autenticar nuevamente y reconstruir el borrador con el mismo `intentId`. Si ocurre después del clic, prevalece `unknown`: no reconstruir ni reemitir y reconciliar primero.
 - No improvisar selectores ni usar coincidencias parciales en producción.
 
 ## Facturas
 
 1. Aceptar como única capacidad automatizada vigente `invoice-services-single-item`: Factura C, concepto Servicios, moneda local y un ítem, únicamente hasta el resumen. Cualquier otra variante debe pasar por aprendizaje visible.
-2. Exigir un job `schemaVersion: 2` completo y validado. Si los datos llegan por chat, crearlo exclusivamente con `arca:job:create` mediante JSON por `stdin`; conservar el `JOB_HANDLE` opaco y no construir el archivo con comandos temporales.
-3. Ejecutar `prepare-invoice <job>` y conservar el `preparedInvoiceId` devuelto.
-4. Mostrar al usuario todo el resumen verificado, incluida la fecha de emisión, período y vencimiento.
-5. No ejecutar `emit-prepared-invoice`: el manifiesto vigente mantiene la emisión de producción deshabilitada hasta una nueva validación visible y promoción humana.
-6. Para revalidar la implementación irreversible pendiente, iniciar una sesión visible exclusiva con `--revalidate-irreversible invoice-services-single-item`. Después de mostrar el resumen, exigir un nuevo mensaje humano exactamente igual a `EMITIR` y ejecutar una sola vez `revalidate-prepared-invoice <preparedInvoiceId> EMITIR`. No releer ni sustituir el job y bloquear reintentos ante estado `unknown`.
-7. La revalidación futura debe comprobar que, después de `Comprobante Generado`, se capture la descarga directa iniciada por `Imprimir...`, se valide el PDF y se extraigan número/CAE antes de marcar `emitted`.
-8. Publicar el PDF y su JSON de metadatos únicamente después de validarlos, bajo `downloads\Emisores\<CUIT formateado - nombre>\Comprobantes Emitidos\<AAAA>\<MM>`. Usar el CUIT como identidad, reutilizar una única carpeta existente y bloquear duplicados o colisiones; nunca sobrescribir.
-9. Para Servicios, calcular el vencimiento cinco días corridos después de la emisión si el usuario no indica otro; dejar actividad, referencia comercial y unidad de medida sin selección por defecto. Si ARCA normaliza la unidad a `unidades` en el resumen, verificarla como salida del portal.
-10. Leer `docs/regimenes-especificos.md` antes de informar una actividad asociada. Si el job declara un régimen específico, exigir que régimen y actividad coincidan con el perfil privado del CUIT emisor; los jobs v2 históricos con `activity` explícita siguen siendo compatibles.
+2. Exigir datos completos. La entrada conversacional acepta fechas `DD/MM/AAAA` o ISO, importe argentino o decimal canónico y vencimiento `Default`; el motor los normaliza antes de abrir Chrome.
+3. Ejecutar `arca:invoice:prepare-chat`, conservar el `preparedInvoiceId` devuelto y mantener la misma sesión visible.
+4. Mostrar emisor, CUIT del emisor, punto de venta, tipo, concepto, moneda, fecha, período, vencimiento, receptor con su CUIT, condición frente al IVA, domicilio, condición de venta, descripción, cantidad, precio unitario, subtotal y total. No inferirlos: deben provenir del resumen estructurado verificado.
+5. Si el usuario no indicó domicilio, aceptar automáticamente solo cuando ARCA devuelva exactamente uno. Ante dos o más, no elegir el primero ni el predeterminado: mostrar las opciones y detenerse hasta recibir una selección explícita. Después de recibirla, conservar `intentId`, incrementar `intentRevision` y reconstruir el borrador; esta revisión solo se admite antes del primer clic irreversible y sobre un ledger `failed_before_emit` o una preparación huérfana.
+6. No ejecutar `emit-prepared-invoice`: el manifiesto vigente mantiene la emisión de producción deshabilitada hasta una nueva validación visible y promoción humana.
+7. Para revalidar la implementación irreversible pendiente, iniciar una sesión visible exclusiva con `--revalidate-irreversible invoice-services-single-item`. Después de mostrar el resumen, exigir un nuevo mensaje humano exactamente igual a `EMITIR` y ejecutar una sola vez `revalidate-prepared-invoice <preparedInvoiceId> EMITIR`. No releer ni sustituir el job. Antes del primer clic se reservan el ledger y una atestación ligada a la versión de la capacidad. Si una falla comprobada ocurre antes de intentar ese clic, se libera la atestación, el ledger vuelve a `failed_before_emit` y la sesión consumida debe cerrarse antes de reconstruir. Desde el primer intento de clic, cualquier timeout, desconexión, caída o resultado incierto queda —o se recupera como— `unknown` y nunca habilita un reintento automático.
+8. La revalidación futura debe comprobar que, después de `Comprobante Generado`, exista exactamente un `Imprimir...`, que el listener se instale antes de su único clic, que se capture y valide la descarga directa y que se extraigan número/CAE antes de marcar `emitted`. Ante ausencia, ambigüedad o falla, no abrir una URL alternativa ni repetir el clic.
+9. Publicar el PDF y su JSON de metadatos únicamente después de validarlos, bajo `downloads\Emisores\<CUIT formateado - nombre>\Comprobantes Emitidos\<AAAA>\<MM>`. Usar el CUIT como identidad, reutilizar una única carpeta existente y bloquear duplicados o colisiones; nunca sobrescribir.
+10. Para Servicios, calcular el vencimiento cinco días corridos desde el campo `date` del comprobante si el usuario no indica otro; dejar actividad, referencia comercial y unidad de medida sin selección por defecto. Si ARCA normaliza la unidad a `unidades` en el resumen, verificarla como salida del portal.
+11. Leer `docs/regimenes-especificos.md` antes de informar una actividad asociada. Si el job declara un régimen específico, exigir que régimen y actividad coincidan con el perfil privado del CUIT emisor; los jobs v2 históricos con `activity` explícita siguen siendo compatibles.
+
+## Rendimiento y mantenimiento
+
+- No ejecutar reparaciones recursivas, `takeown`, UAC, `npm audit`, tests, sincronización de capacidades ni `autoreview` durante una factura rutinaria.
+- El arranque normal solo valida límites administrados del runtime y nunca enumera carpetas históricas desconocidas.
+- Al adoptar una versión nueva del layout sobre un runtime existente, el marcador privado obliga a ejecutar una única vez `arca:runtime:repair` antes de operar. Los arranques siguientes vuelven al camino O(1).
+- Usar `arca:runtime:repair` únicamente como mantenimiento explícito, fuera de una sesión fiscal y con su confirmación literal. El comando bloquea la reparación si detecta una sesión o aprendizaje vivos o si no puede verificar sus indicadores privados.
+- Medir por separado login a resumen (`chat_login_to_summary`) y confirmación a PDF validado (`emission_confirmation_to_pdf`) cuando el usuario solicite una revalidación supervisada.
 
 ## Aprendizaje durable
 
