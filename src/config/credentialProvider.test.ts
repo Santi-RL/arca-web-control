@@ -93,7 +93,7 @@ test("json-file rechaza CUIT duplicado, enlaces y archivos dentro del repositori
     );
 
     const hardLink = path.join(root, "credential-hard-link.json");
-    await fs.link(path.join(process.cwd(), "package.json"), hardLink);
+    await fs.link(duplicateFile, hardLink);
     await assert.rejects(
       saveCredentialProviderSelection(runtime, { schemaVersion: 1, provider: "json-file", file: hardLink }),
       /enlace|junction/,
