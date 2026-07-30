@@ -24,7 +24,7 @@ import { resolveCredentialRoutingIdentity } from "../config/env.js";
 import { measureArcaPerformance } from "./performance.js";
 import { downloadGeneratedInvoicePdf, inspectArcaInvoicePdf } from "./invoicePdf.js";
 import { sanitizeErrorMessage } from "./publicErrors.js";
-import { requireHiddenCapability, requireInvoiceJobCapability } from "../capabilities/registry.js";
+import { requireHiddenCapability, requireInvoiceJobCapability, requireInvoiceJobVisibleRevalidation, requireVisibleInvoiceRevalidationCapability } from "../capabilities/registry.js";
 import {
   assertOfficialArcaGeneratedInvoicePageUrl,
   assertOfficialArcaInspectableUrl,
@@ -50,6 +50,7 @@ export type ArcaLiveSessionOptions = {
   artifactRoot?: string;
   visibilityMode?: SessionVisibilityMode;
   learnedCapability?: LearnedFlowCapability;
+  revalidationCapability?: LearnedFlowCapability;
   allowedCommands?: string[];
   startupSignal?: AbortSignal;
 };
@@ -61,6 +62,7 @@ type ResolvedArcaLiveSessionOptions = {
   artifactRoot: string;
   visibilityMode: SessionVisibilityMode;
   learnedCapability?: LearnedFlowCapability;
+  revalidationCapability?: LearnedFlowCapability;
   allowedCommands?: string[];
   startupSignal?: AbortSignal;
 };
@@ -75,6 +77,7 @@ export type ArcaLiveSessionState = {
   artifactDir: string;
   visibilityMode: SessionVisibilityMode;
   learnedCapability?: LearnedFlowCapability;
+  revalidationCapability?: LearnedFlowCapability;
 };
 
 export type ArcaLiveSessionResult = {
@@ -113,6 +116,12 @@ export class ArcaLiveSession {
       if (visibilityMode === "production-hidden") {
         if (!options.learnedCapability) throw new Error("production-hidden requiere una capacidad registrada.");
         await requireHiddenCapability(options.learnedCapability);
+      }
+      if (options.revalidationCapability) {
+        if (visibilityMode !== "visible" || options.learnedCapability) {
+          throw new Error("La revalidación irreversible exige una sesión visible exclusiva, sin production-hidden ni otra capacidad.");
+        }
+        await requireVisibleInvoiceRevalidationCapability(options.revalidationCapability);
       }
       const artifactRoot = options.artifactRoot ?? path.join(options.config.runtimeRoot, "sessions", "artifacts");
       const artifactDir = path.join(artifactRoot, timestampForPath());
@@ -180,6 +189,7 @@ export class ArcaLiveSession {
       assertCommandAllowedInSessionMode(command, {
         visibilityMode: this.options.visibilityMode,
         learnedCapability: this.options.learnedCapability,
+        revalidationCapability: this.options.revalidationCapability,
         allowedCommands: this.options.allowedCommands,
       });
       if (invalidatesPreparation(command.type)) await this.invalidateActivePreparation(`La preparación fue invalidada por el comando ${command.type}.`);
@@ -229,6 +239,7 @@ export class ArcaLiveSession {
       artifactDir: this.artifactDir,
       visibilityMode: this.options.visibilityMode,
       learnedCapability: this.options.learnedCapability,
+      revalidationCapability: this.options.revalidationCapability,
     };
   }
 
@@ -275,7 +286,12 @@ export class ArcaLiveSession {
       }
 
       case "emit-prepared-invoice": {
-        const data = await this.emitPreparedInvoice(command.preparedInvoiceId);
+        const data = await this.emitPreparedInvoice(command.preparedInvoiceId, false);
+        return this.ok(await this.getState(), data);
+      }
+
+      case "revalidate-prepared-invoice": {
+        const data = await this.emitPreparedInvoice(command.preparedInvoiceId, true);
         return this.ok(await this.getState(), data);
       }
 
@@ -397,7 +413,7 @@ export class ArcaLiveSession {
       const privateJobPath = await resolvePrivateInvoiceJobPath(jobPath, runtime.privateJobs, runtime.root);
       const loadedJob = await loadInvoiceJob(privateJobPath);
       const capability = await requireInvoiceJobCapability(loadedJob, "prepare-invoice", {
-        capabilityId: this.options.learnedCapability,
+        capabilityId: this.options.learnedCapability ?? this.options.revalidationCapability,
         requireHidden: this.options.visibilityMode === "production-hidden",
       });
       const jobIdentity = resolveCredentialRoutingIdentity(loadedJob.issuerKey);
@@ -454,7 +470,7 @@ export class ArcaLiveSession {
       throw error;
     }
   }
-  private async emitPreparedInvoice(preparedInvoiceId: string): Promise<{ message: string; operationId: string; summary: PreparedInvoiceSummary; pdfPath: string; pdfSha256: string; voucherNumber?: string; cae?: string; screenshotPath: string }> {
+  private async emitPreparedInvoice(preparedInvoiceId: string, visibleRevalidation: boolean): Promise<{ message: string; operationId: string; summary: PreparedInvoiceSummary; pdfPath: string; pdfSha256: string; voucherNumber?: string; cae?: string; screenshotPath: string }> {
     const candidate = this.preparedInvoices.current;
     assertOfficialArcaRcelUrl(this.page.url(), "la lectura del resumen preparado");
     const body = await this.page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
@@ -479,10 +495,17 @@ export class ArcaLiveSession {
     let result: Awaited<ReturnType<typeof executeControlledEmission>> | undefined;
     let pdfReservation: PdfDestinationReservation | undefined;
     try {
-      await requireInvoiceJobCapability(state.job, "emit-prepared-invoice", {
-        capabilityId: state.capabilityId,
-        requireHidden: this.options.visibilityMode === "production-hidden",
-      });
+      if (visibleRevalidation) {
+        if (!this.options.revalidationCapability || state.capabilityId !== this.options.revalidationCapability) {
+          throw new Error("La preparación no pertenece a la capacidad habilitada para esta revalidación visible.");
+        }
+        await requireInvoiceJobVisibleRevalidation(state.job, this.options.revalidationCapability);
+      } else {
+        await requireInvoiceJobCapability(state.job, "emit-prepared-invoice", {
+          capabilityId: state.capabilityId,
+          requireHidden: this.options.visibilityMode === "production-hidden",
+        });
+      }
       validatePreparedSummary(state.summary, state.job);
       const runtime = getRuntimePaths();
       const pdfTarget = buildPreparedInvoicePdfPath(state.job);
@@ -1158,5 +1181,5 @@ function assertStableInspectablePage(page: Page, expectedUrl: string, action: st
 }
 
 export function invalidatesPreparation(type: SessionCommand["type"]): boolean {
-  return !["status", "snapshot", "screenshot", "emit-prepared-invoice"].includes(type);
+  return !["status", "snapshot", "screenshot", "emit-prepared-invoice", "revalidate-prepared-invoice"].includes(type);
 }

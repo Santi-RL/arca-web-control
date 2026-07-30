@@ -25,6 +25,7 @@ const liveSessionStateSchema = z.object({
   artifactDir: absolutePathSchema,
   visibilityMode: visibilityModeSchema,
   learnedCapability: capabilityIdSchema.optional(),
+  revalidationCapability: capabilityIdSchema.optional(),
 }).strict();
 
 export const currentSessionStateSchema = z.object({
@@ -37,6 +38,7 @@ export const currentSessionStateSchema = z.object({
   issuerName: z.string().trim().min(1).max(200).refine((value) => !/[\u0000-\u001f\u007f]/u.test(value), "El nombre del emisor contiene caracteres de control."),
   visibilityMode: visibilityModeSchema,
   learnedCapability: capabilityIdSchema.optional(),
+  revalidationCapability: capabilityIdSchema.optional(),
   artifactDir: absolutePathSchema,
   startedAt: timestampSchema,
   handoffComplete: z.boolean(),
@@ -51,11 +53,17 @@ export const currentSessionStateSchema = z.object({
   if (current.state.learnedCapability !== current.learnedCapability) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["state", "learnedCapability"], message: "La capacidad del estado no coincide con la sesión." });
   }
+  if (current.state.revalidationCapability !== current.revalidationCapability) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["state", "revalidationCapability"], message: "La capacidad de revalidación del estado no coincide con la sesión." });
+  }
   if (!samePath(current.state.artifactDir, current.artifactDir)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["state", "artifactDir"], message: "La ruta de artefactos del estado no coincide con la sesión." });
   }
   if (current.visibilityMode === "production-hidden" && !current.learnedCapability) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["learnedCapability"], message: "production-hidden requiere una capacidad declarada." });
+  }
+  if (current.revalidationCapability && (current.visibilityMode !== "visible" || current.learnedCapability)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["revalidationCapability"], message: "La revalidación irreversible requiere una sesión visible exclusiva." });
   }
 });
 

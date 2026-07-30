@@ -54,3 +54,26 @@ test("rechaza CUIT, fecha y estado interno incoherentes", () => {
   assert.equal(currentSessionStateSchema.safeParse({ ...validState, startedAt: "2030-06-15" }).success, false);
   assert.equal(currentSessionStateSchema.safeParse({ ...validState, state: { ...validState.state, visibilityMode: "production-hidden" } }).success, false);
 });
+
+test("la revalidación irreversible exige estado coherente y una sesión visible exclusiva", () => {
+  const revalidationState = {
+    ...validState,
+    revalidationCapability: "invoice-services-single-item",
+    state: { ...validState.state, revalidationCapability: "invoice-services-single-item" },
+  };
+  assert.equal(currentSessionStateSchema.safeParse(revalidationState).success, true);
+  assert.equal(currentSessionStateSchema.safeParse({
+    ...revalidationState,
+    state: { ...revalidationState.state, revalidationCapability: undefined },
+  }).success, false);
+  assert.equal(currentSessionStateSchema.safeParse({
+    ...revalidationState,
+    visibilityMode: "production-hidden",
+    learnedCapability: "invoice-services-single-item",
+    state: {
+      ...revalidationState.state,
+      visibilityMode: "production-hidden",
+      learnedCapability: "invoice-services-single-item",
+    },
+  }).success, false);
+});

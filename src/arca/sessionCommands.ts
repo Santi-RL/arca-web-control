@@ -30,6 +30,11 @@ const commandSchemas = {
     preparedInvoiceId: z.string().uuid(),
     confirmation: z.literal("EMITIR"),
   }),
+  revalidatePreparedInvoice: z.object({
+    type: z.literal("revalidate-prepared-invoice"),
+    preparedInvoiceId: z.string().uuid(),
+    confirmation: z.literal("EMITIR"),
+  }),
   savePrintPdf: z.object({
     type: z.literal("save-print-pdf"),
     outputPath: z.string().trim().min(1),
@@ -49,6 +54,7 @@ export const sessionCommandSchema = z.discriminatedUnion("type", [
   commandSchemas.inputs,
   commandSchemas.prepareInvoice,
   commandSchemas.emitPreparedInvoice,
+  commandSchemas.revalidatePreparedInvoice,
   commandSchemas.savePrintPdf,
 ]);
 
@@ -57,6 +63,7 @@ export type SessionCommand = z.infer<typeof sessionCommandSchema>;
 export type SessionModePolicy = {
   visibilityMode: SessionVisibilityMode;
   learnedCapability?: LearnedFlowCapability;
+  revalidationCapability?: LearnedFlowCapability;
   allowedCommands?: string[];
 };
 
@@ -111,6 +118,12 @@ export function parseSessionCommandArgs(argv: string[]): SessionCommand {
       }
       return { type: "emit-prepared-invoice", preparedInvoiceId: args[0] ?? "", confirmation: "EMITIR" };
 
+    case "revalidate-prepared-invoice":
+      if (args.length !== 2 || args[1] !== "EMITIR") {
+        throw new Error("Uso: arca:session:cmd -- revalidate-prepared-invoice <preparedInvoiceId> EMITIR");
+      }
+      return { type: "revalidate-prepared-invoice", preparedInvoiceId: args[0] ?? "", confirmation: "EMITIR" };
+
     case "save-print-pdf":
       if (args.length === 0) {
         throw new Error("Uso: arca:session:cmd -- save-print-pdf <ruta-pdf>");
@@ -123,6 +136,12 @@ export function parseSessionCommandArgs(argv: string[]): SessionCommand {
 }
 
 export function assertCommandAllowedInSessionMode(command: SessionCommand, policy: SessionModePolicy): void {
+  if (command.type === "revalidate-prepared-invoice") {
+    if (policy.visibilityMode !== "visible" || !policy.revalidationCapability) {
+      throw new Error("revalidate-prepared-invoice solo se admite en una sesión visible iniciada explícitamente para revalidación irreversible.");
+    }
+    return;
+  }
   if (policy.visibilityMode === "visible") {
     return;
   }

@@ -86,6 +86,7 @@ test("prepare-invoice invalida cualquier preparación anterior antes de comenzar
   assert.equal(invalidatesPreparation("snapshot"), false);
   assert.equal(invalidatesPreparation("screenshot"), false);
   assert.equal(invalidatesPreparation("emit-prepared-invoice"), false);
+  assert.equal(invalidatesPreparation("revalidate-prepared-invoice"), false);
 });
 
 test("buildPreparedInvoiceSummary conserva identidad real del emisor sin fallback de credencial", () => {

@@ -63,6 +63,22 @@ La preparación vence a los 60 minutos. Una navegación o mutación posterior pu
 
 El manifiesto vigente no incluye `emit-prepared-invoice`; por lo tanto, la versión pública actual debe detenerse en el resumen y no ejecutar la acción irreversible. La implementación se conserva para una próxima validación visible completa de generación, descarga, PDF y ledger.
 
+La única excepción es una corrida de revalidación irreversible explícita y supervisada. Debe iniciarse desde cero en Chrome visible con:
+
+```powershell
+npm run arca:session:start -- --issuer <CUIT_EMISOR> --revalidate-irreversible invoice-services-single-item
+```
+
+El launcher y el worker validan que el manifiesto se encuentre exactamente en estado pendiente de revalidación: `automated_to_summary`, sin modo oculto, sin comando productivo de emisión y con pruebas, evidencia real, acción irreversible y confirmación declaradas. Ese modo es exclusivo, queda ligado a una capacidad concreta y no modifica ni promueve el manifiesto.
+
+Después de preparar y mostrar el resumen completo, un nuevo mensaje humano debe contener exactamente `EMITIR`. Recién entonces se admite una sola ejecución:
+
+```powershell
+npm run arca:session:cmd -- revalidate-prepared-invoice <preparedInvoiceId> EMITIR
+```
+
+La preparación vigente, su huella de página, el job inmutable, el alcance cerrado y el ledger se verifican nuevamente antes del primer clic. Ante cualquier falla posterior, el estado queda `unknown`, la preparación se invalida y no se reintenta. Una corrida exitosa habilita la revisión humana y la posterior actualización del manifiesto; nunca lo promueve automáticamente.
+
 Cuando una versión futura sea promovida nuevamente, la autorización válida será únicamente el texto exacto `EMITIR`, recibido después de mostrar y revisar el resumen. El CLI puede validar el literal y el `preparedInvoiceId`, pero no la autoría del mensaje. La capa agente nunca debe sintetizar `EMITIR`, convertir una paráfrasis en esa palabra ni reutilizar una autorización de otra preparación.
 
 Si una revalidación supervisada futura mostrara `Comprobante Generado` pero fallara la obtención o validación del PDF, la operación deberá quedar en `unknown` y nunca emitirse otra vez. La recuperación seguirá exigiendo un PDF oficial y confirmación explícita:

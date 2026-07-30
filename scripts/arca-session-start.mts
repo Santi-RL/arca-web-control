@@ -6,18 +6,19 @@ import { setTimeout as delay } from "node:timers/promises";
 import { resolveCredentialRoutingIdentity } from "../src/config/env.js";
 import { ensureRuntimeLayout } from "../src/config/runtimePaths.js";
 import { readJsonIfExists } from "../src/io/atomicJson.js";
-import { requireHiddenCapability } from "../src/capabilities/registry.js";
+import { requireHiddenCapability, requireVisibleInvoiceRevalidationCapability } from "../src/capabilities/registry.js";
 import { SessionVisibilityMode } from "../src/types.js";
 import { attestSessionRuntimeToWorker, buildSessionWorkerArgs, isSessionHandoffAckMessage, retrySessionStatus, sessionHandoffMessage, sessionLauncherHandoffEnv, sessionShutdownMessage, waitForSessionPublished } from "../src/arca/sessionLauncher.js";
 import { startupErrorFromLog } from "../src/arca/loginErrors.js";
 import { measureArcaPerformance } from "../src/arca/performance.js";
 import { buildSessionControlUrl, readCurrentSessionStateIfExists, type CurrentSessionState } from "../src/arca/sessionState.js";
 
-type Args = { forceNew: boolean; issuer: string; visibilityMode: SessionVisibilityMode; learnedCapability?: string; timeoutMs: number };
+type Args = { forceNew: boolean; issuer: string; visibilityMode: SessionVisibilityMode; learnedCapability?: string; revalidationCapability?: string; timeoutMs: number };
 const args = parseArgs(process.argv.slice(2));
 const runtime = await measureArcaPerformance("launcher_runtime", async () => await ensureRuntimeLayout());
 const issuerIdentity = await measureArcaPerformance("launcher_identity", async () => resolveCredentialRoutingIdentity(args.issuer));
 if (args.visibilityMode === "production-hidden") await requireHiddenCapability(args.learnedCapability || "");
+if (args.revalidationCapability) await requireVisibleInvoiceRevalidationCapability(args.revalidationCapability);
 const currentPath = path.join(runtime.sessions, "current.json");
 const lockPath = path.join(runtime.sessions, "current.lock");
 const existing = await readCurrentSessionStateIfExists(currentPath);
@@ -26,7 +27,7 @@ if (existing) {
   if (!status) {
     throw new Error("Existe un estado de sesión huérfano. Verificá que el PID haya terminado y retiralo junto con current.lock de forma manual antes de iniciar otra sesión.");
   }
-  const same = existing.issuerKey === issuerIdentity.issuerKey && existing.visibilityMode === args.visibilityMode && existing.learnedCapability === args.learnedCapability;
+  const same = existing.issuerKey === issuerIdentity.issuerKey && existing.visibilityMode === args.visibilityMode && existing.learnedCapability === args.learnedCapability && existing.revalidationCapability === args.revalidationCapability;
   if (!args.forceNew && same && existing.handoffComplete === true && status.state?.readyState === "portal" && !status.state.captchaVisible) { printReady(existing, status, true); process.exit(0); }
   if (!args.forceNew) throw new Error("Ya existe una sesión viva. Usá arca:session:stop o --force-new para cerrarla de forma controlada.");
   await stop(existing);
@@ -41,6 +42,7 @@ const childArgs = buildSessionWorkerArgs({
   issuer: issuerIdentity.issuerKey,
   productionHidden: args.visibilityMode === "production-hidden",
   capability: args.learnedCapability,
+  revalidationCapability: args.revalidationCapability,
 });
 const child = spawn(process.execPath, childArgs, { detached: true, stdio: ["ignore", out, err, "ipc"], windowsHide: true, env: { ...process.env, [sessionLauncherHandoffEnv]: "1" } });
 const publishedSession = waitForSessionPublished(child, args.timeoutMs);
@@ -74,7 +76,7 @@ try {
   throw error;
 } finally { fsSync.closeSync(out); fsSync.closeSync(err); }
 
-function parseArgs(values: string[]): Args { const get = (name: string) => { const index = values.indexOf(name); return index >= 0 ? values[index + 1] : undefined; }; const issuer = get("--issuer"); if (!issuer) throw new Error("Falta --issuer."); const timeoutMs = Number(get("--timeout-ms") || 180000); if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("--timeout-ms inválido."); const visibilityMode: SessionVisibilityMode = values.includes("--production-hidden") ? "production-hidden" : "visible"; const learnedCapability = get("--capability"); if (visibilityMode === "production-hidden" && !learnedCapability) throw new Error("Falta --capability."); return { forceNew: values.includes("--force-new"), issuer, visibilityMode, learnedCapability, timeoutMs }; }
+function parseArgs(values: string[]): Args { const get = (name: string) => { const index = values.indexOf(name); return index >= 0 ? values[index + 1] : undefined; }; const issuer = get("--issuer"); if (!issuer) throw new Error("Falta --issuer."); const timeoutMs = Number(get("--timeout-ms") || 180000); if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("--timeout-ms inválido."); const visibilityMode: SessionVisibilityMode = values.includes("--production-hidden") ? "production-hidden" : "visible"; const learnedCapability = get("--capability"); const revalidationCapability = get("--revalidate-irreversible"); if (visibilityMode === "production-hidden" && !learnedCapability) throw new Error("Falta --capability."); if (revalidationCapability && (visibilityMode !== "visible" || learnedCapability)) throw new Error("--revalidate-irreversible requiere una sesión visible exclusiva."); return { forceNew: values.includes("--force-new"), issuer, visibilityMode, learnedCapability, revalidationCapability, timeoutMs }; }
 async function fetchStatus(current: CurrentSessionState): Promise<any | undefined> { return await retrySessionStatus(async () => { try { const response = await fetch(buildSessionControlUrl(current, "/status"), { headers: { authorization: `Bearer ${current.token}` }, signal: AbortSignal.timeout(1000) }); return response.ok ? await response.json() : undefined; } catch { return undefined; } }, 5000, 100); }
 async function stop(current: CurrentSessionState): Promise<void> { const response = await fetch(buildSessionControlUrl(current, "/stop"), { method: "POST", headers: { authorization: `Bearer ${current.token}` }, signal: AbortSignal.timeout(10000) }); if (!response.ok) throw new Error("No se pudo cerrar la sesión anterior de forma controlada."); }
 async function waitUntilStopped(pid: number, timeout: number): Promise<void> { const deadline = Date.now() + timeout; while (Date.now() < deadline) { try { process.kill(pid, 0); } catch { return; } await delay(250); } throw new Error("La sesión anterior no terminó dentro del plazo."); }

@@ -9,8 +9,8 @@ Archivo generado desde el registro de comandos del proyecto. No editar manualmen
 - `npm run arca:credentials:migrate-env`: Migra temporalmente desde .env.local.
 - `npm run arca:credentials:migrate-vault`: Migra explícitamente credenciales legacy al esquema canónico por CUIT.
 - `npm run arca:credentials:import-csv`: Importa localmente un CSV privado con simulación, CUIT único y rollback.
-- `npm run arca:session:start`: Inicia una sesión y exige READY_STATE=portal.
-- `npm run arca:session:cmd`: Ejecuta comandos tipados sobre la sesión actual.
+- `npm run arca:session:start`: Inicia una sesión y exige READY_STATE=portal; la revalidación irreversible requiere un modo visible explícito y exclusivo.
+- `npm run arca:session:cmd`: Ejecuta comandos tipados sobre la sesión actual; revalidate-prepared-invoice exige preparedInvoiceId vigente y EMITIR.
 - `npm run arca:session:stop`: Cierra la sesión de forma controlada.
 - `npm run arca:learn:start`: Inicia aprendizaje visible después del login.
 - `npm run arca:learn:cmd`: Inspecciona y controla de forma híbrida la sesión visible, agrega evidencia o finaliza el candidato.

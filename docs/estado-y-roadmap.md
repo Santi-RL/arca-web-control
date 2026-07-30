@@ -44,6 +44,8 @@ La interfaz inició una descarga directa al pulsar `Imprimir...`. La estrategia 
 
 El código vigente escucha la descarga antes del único clic, valida el PDF y extrae número/CAE. Ese tramo nuevo todavía requiere una próxima validación visible completa; por eso `lastValidatedVisible` continúa en `false`, la madurez regresó a `automated_to_summary` y tanto la emisión como el modo oculto permanecen deshabilitados por el manifiesto.
 
+Para resolver la circularidad sin falsear la madurez, existe un carril de revalidación visible explícito. Solo puede habilitarse al iniciar una sesión exclusiva para la capacidad pendiente, exige un `preparedInvoiceId` vigente y la confirmación exacta `EMITIR`, reutiliza el mismo flujo irreversible y mantiene `unknown` como resultado terminal ante incertidumbre. Este carril no habilita la emisión productiva ni modifica el manifiesto automáticamente.
+
 ## Evaluaciones aisladas de la skill
 
 Las evaluaciones se realizaron sin abrir ARCA, sin acceder al runtime privado y sin ejecutar acciones fiscales:

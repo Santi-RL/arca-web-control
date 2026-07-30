@@ -33,6 +33,11 @@ test("parseSessionCommandArgs interpreta únicamente mutaciones especializadas",
     preparedInvoiceId: "00000000-0000-4000-8000-000000000000",
     confirmation: "EMITIR",
   });
+  assert.deepEqual(parseSessionCommandArgs(["revalidate-prepared-invoice", "00000000-0000-4000-8000-000000000000", "EMITIR"]), {
+    type: "revalidate-prepared-invoice",
+    preparedInvoiceId: "00000000-0000-4000-8000-000000000000",
+    confirmation: "EMITIR",
+  });
   assert.deepEqual(parseSessionCommandArgs(["save-print-pdf", "factura.pdf"]), {
     type: "save-print-pdf",
     outputPath: "factura.pdf",
@@ -64,7 +69,9 @@ test("sessionCommandSchema valida la ruta preparada y rechaza payloads no permit
   assert.equal(sessionCommandSchema.parse({ type: "inputs" }).type, "inputs");
   assert.equal(sessionCommandSchema.parse({ type: "prepare-invoice", jobPath: "jobs/factura.json" }).type, "prepare-invoice");
   assert.equal(sessionCommandSchema.parse({ type: "emit-prepared-invoice", preparedInvoiceId: "00000000-0000-4000-8000-000000000000", confirmation: "EMITIR" }).type, "emit-prepared-invoice");
+  assert.equal(sessionCommandSchema.parse({ type: "revalidate-prepared-invoice", preparedInvoiceId: "00000000-0000-4000-8000-000000000000", confirmation: "EMITIR" }).type, "revalidate-prepared-invoice");
   assert.throws(() => sessionCommandSchema.parse({ type: "emit-prepared-invoice", preparedInvoiceId: "00000000-0000-4000-8000-000000000000", confirmation: "SI" }));
+  assert.throws(() => sessionCommandSchema.parse({ type: "revalidate-prepared-invoice", preparedInvoiceId: "00000000-0000-4000-8000-000000000000", confirmation: "SI" }));
   assert.equal(sessionCommandSchema.parse({ type: "save-print-pdf", outputPath: "factura.pdf" }).type, "save-print-pdf");
   assert.equal(sessionCommandSchema.parse({ type: "select-options" }).type, "select-options");
   assert.throws(() => sessionCommandSchema.parse({ type: "click-text", text: "Aceptar" }));
@@ -85,6 +92,22 @@ test("redactCommandForLog conserva únicamente comandos que no reciben secretos"
 
 test("emit-prepared-invoice requiere confirmación exacta EMITIR", () => {
   assert.throws(() => parseSessionCommandArgs(["emit-prepared-invoice", "00000000-0000-4000-8000-000000000000", "emitir"]), /EMITIR/);
+});
+
+test("revalidate-prepared-invoice requiere confirmación exacta y una sesión visible habilitada explícitamente", () => {
+  assert.throws(() => parseSessionCommandArgs(["revalidate-prepared-invoice", "00000000-0000-4000-8000-000000000000", "emitir"]), /EMITIR/);
+  const command = parseSessionCommandArgs(["revalidate-prepared-invoice", "00000000-0000-4000-8000-000000000000", "EMITIR"]);
+  assert.throws(() => assertCommandAllowedInSessionMode(command, { visibilityMode: "visible" }), /iniciada explícitamente/i);
+  assert.doesNotThrow(() => assertCommandAllowedInSessionMode(command, {
+    visibilityMode: "visible",
+    revalidationCapability: "invoice-services-single-item",
+  }));
+  assert.throws(() => assertCommandAllowedInSessionMode(command, {
+    visibilityMode: "production-hidden",
+    learnedCapability: "invoice-services-single-item",
+    revalidationCapability: "invoice-services-single-item",
+    allowedCommands: ["revalidate-prepared-invoice"],
+  }), /sesión visible/i);
 });
 
 test("production-hidden solo permite los comandos declarados por la capacidad", () => {

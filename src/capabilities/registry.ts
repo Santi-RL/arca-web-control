@@ -134,6 +134,49 @@ export async function requireInvoiceJobCapability(
   }, options.registryRoot);
 }
 
+export async function requireVisibleInvoiceRevalidationCapability(
+  id: string,
+  root = path.resolve("config", "capabilities"),
+): Promise<CapabilityManifest> {
+  const capability = (await loadCapabilityRegistry(root)).find((item) => item.id === id);
+  if (!capability) throw new Error(`Capacidad desconocida: ${id}.`);
+  if (
+    capability.maturity !== "automated_to_summary"
+    || capability.hiddenAllowed
+    || capability.lastValidatedVisible
+    || capability.lastValidatedAt !== null
+    || !capability.commands.includes("prepare-invoice")
+    || capability.commands.includes("emit-prepared-invoice")
+    || capability.runtimeScope?.kind !== "invoice"
+    || !capability.irreversibleAction
+    || capability.confirmation !== "EMITIR"
+    || capability.testEvidence.length === 0
+    || capability.realEvidence.length === 0
+  ) {
+    throw new Error(`La capacidad ${id} no está en estado canónico para una revalidación irreversible visible.`);
+  }
+  return capability;
+}
+
+export async function requireInvoiceJobVisibleRevalidation(
+  job: Pick<ResolvedInvoiceJob, "voucherType" | "concept" | "currency">,
+  capabilityId: string,
+  root = path.resolve("config", "capabilities"),
+): Promise<CapabilityManifest> {
+  const capability = await requireVisibleInvoiceRevalidationCapability(capabilityId, root);
+  const scope = capability.runtimeScope;
+  if (
+    scope?.kind !== "invoice"
+    || canonicalRuntimeValue(scope.voucherType) !== canonicalRuntimeValue(job.voucherType)
+    || canonicalRuntimeValue(scope.concept) !== canonicalRuntimeValue(job.concept)
+    || canonicalRuntimeValue(scope.currency) !== canonicalRuntimeValue(job.currency)
+    || scope.itemCount !== 1
+  ) {
+    throw new Error(`La factura no coincide con el alcance cerrado de revalidación de ${capabilityId}.`);
+  }
+  return capability;
+}
+
 export async function requireInvoiceCapability(
   request: InvoiceRuntimeRequest,
   root = path.resolve("config", "capabilities"),

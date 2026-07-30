@@ -40,6 +40,10 @@ test("el wrapper ejecuta el worker directamente con el loader de tsx", () => {
     "--capability",
     "invoice",
   ]);
+  assert.deepEqual(buildSessionWorkerArgs({ scriptPath: "arca-session.mts", issuer: "EMISOR", revalidationCapability: "invoice" }).slice(-2), [
+    "--revalidate-irreversible",
+    "invoice",
+  ]);
 });
 
 test("reconoce únicamente los mensajes IPC de ciclo de vida", () => {

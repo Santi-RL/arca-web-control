@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { loadCredentialsAsync, loadRuntimeConfig } from "../src/config/env.js";
 import type { ArcaLiveSession as ArcaLiveSessionInstance } from "../src/arca/liveSession.js";
 import { isAuthorizedSessionRequest, sessionCommandSchema } from "../src/arca/sessionCommands.js";
-import { requireHiddenCapability } from "../src/capabilities/registry.js";
+import { requireHiddenCapability, requireVisibleInvoiceRevalidationCapability } from "../src/capabilities/registry.js";
 import { SessionVisibilityMode } from "../src/types.js";
 import { acquireProcessLock } from "../src/io/processLock.js";
 import { isSessionHandoffMessage, isSessionShutdownMessage, notifySessionPublished, sessionHandoffAckMessage, sessionLauncherHandoffEnv } from "../src/arca/sessionLauncher.js";
@@ -14,7 +14,7 @@ import { sanitizeErrorMessage } from "../src/arca/publicErrors.js";
 import { resolveSessionRuntime } from "../src/arca/sessionRuntime.js";
 import { readCurrentSessionStateIfExists, writeCurrentSessionState } from "../src/arca/sessionState.js";
 
-type Args = { issuer: string; visibilityMode: SessionVisibilityMode; learnedCapability?: string };
+type Args = { issuer: string; visibilityMode: SessionVisibilityMode; learnedCapability?: string; revalidationCapability?: string };
 let shutdownRequested = false;
 const launcherHandoffRequired = process.env[sessionLauncherHandoffEnv] === "1";
 let launcherHandoffComplete = !launcherHandoffRequired;
@@ -49,6 +49,7 @@ const liveSessionModulePromise = measureArcaPerformance("worker_session_module",
 const credentialsPromise = measureArcaPerformance("worker_credentials", async () => await loadCredentialsAsync(args.issuer));
 const [{ ArcaLiveSession }, credentials] = await Promise.all([liveSessionModulePromise, credentialsPromise]);
 const capability = args.visibilityMode === "production-hidden" ? await requireHiddenCapability(args.learnedCapability || "") : undefined;
+if (args.revalidationCapability) await requireVisibleInvoiceRevalidationCapability(args.revalidationCapability);
 const token = randomBytes(32).toString("hex");
 const currentPath = path.join(runtime.sessions, "current.json");
 const lockPath = path.join(runtime.sessions, "current.lock");
@@ -62,6 +63,7 @@ try {
     credentials,
     visibilityMode: args.visibilityMode,
     learnedCapability: args.learnedCapability,
+    revalidationCapability: args.revalidationCapability,
     allowedCommands: capability?.commands,
     startupSignal: startupAbort.signal,
   });
@@ -126,7 +128,7 @@ async function writeCurrent(): Promise<void> {
   if (!activeServer || !activeSession) return;
   const address = activeServer.address();
   if (!address || typeof address === "string") return;
-  await writeCurrentSessionState(currentPath, { version: 2, pid: process.pid, host: "127.0.0.1", port: address.port, token, issuerKey: credentials.issuerKey, issuerName: credentials.displayName, visibilityMode: args.visibilityMode, learnedCapability: args.learnedCapability, artifactDir: activeSession.artifactDir, startedAt, handoffComplete: launcherHandoffComplete, state: await activeSession.getState() });
+  await writeCurrentSessionState(currentPath, { version: 2, pid: process.pid, host: "127.0.0.1", port: address.port, token, issuerKey: credentials.issuerKey, issuerName: credentials.displayName, visibilityMode: args.visibilityMode, learnedCapability: args.learnedCapability, revalidationCapability: args.revalidationCapability, artifactDir: activeSession.artifactDir, startedAt, handoffComplete: launcherHandoffComplete, state: await activeSession.getState() });
 }
 
 async function completeLauncherHandoff(): Promise<void> {
@@ -167,11 +169,13 @@ async function performShutdown(): Promise<void> {
 
 function parseArgs(values: string[]): Args {
   const get = (name: string) => { const index = values.indexOf(name); return index >= 0 ? values[index + 1] : undefined; };
-  const issuer = get("--issuer"); if (!issuer) throw new Error("Uso: --issuer <issuerKey> [--production-hidden --capability <slug>]");
+  const issuer = get("--issuer"); if (!issuer) throw new Error("Uso: --issuer <issuerKey> [--production-hidden --capability <slug>] [--revalidate-irreversible <slug>]");
   const visibilityMode: SessionVisibilityMode = values.includes("--production-hidden") ? "production-hidden" : "visible";
   const learnedCapability = get("--capability");
+  const revalidationCapability = get("--revalidate-irreversible");
   if (visibilityMode === "production-hidden" && !learnedCapability) throw new Error("--production-hidden requiere --capability.");
-  return { issuer, visibilityMode, learnedCapability };
+  if (revalidationCapability && (visibilityMode !== "visible" || learnedCapability)) throw new Error("--revalidate-irreversible requiere una sesión visible exclusiva.");
+  return { issuer, visibilityMode, learnedCapability, revalidationCapability };
 }
 async function readJsonBody(request: http.IncomingMessage): Promise<unknown> { const chunks: Buffer[] = []; let size = 0; for await (const chunk of request) { const buffer = Buffer.from(chunk); size += buffer.length; if (size > 1024 * 1024) throw new Error("Cuerpo de comando demasiado grande."); chunks.push(buffer); } const raw = Buffer.concat(chunks).toString("utf8").trim(); return raw ? JSON.parse(raw) : {}; }
 function sendJson(response: http.ServerResponse, code: number, payload: unknown): void { response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }); response.end(JSON.stringify(payload, null, 2)); }

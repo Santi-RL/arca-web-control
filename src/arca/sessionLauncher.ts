@@ -7,11 +7,13 @@ export type SessionWorkerLaunchOptions = {
   issuer: string;
   productionHidden?: boolean;
   capability?: string;
+  revalidationCapability?: string;
 };
 
 export function buildSessionWorkerArgs(options: SessionWorkerLaunchOptions): string[] {
   const args = ["--import", "tsx", options.scriptPath, "--issuer", options.issuer];
   if (options.productionHidden) args.push("--production-hidden", "--capability", options.capability ?? "");
+  if (options.revalidationCapability) args.push("--revalidate-irreversible", options.revalidationCapability);
   return args;
 }
 export const sessionLauncherHandoffEnv = "ARCA_SESSION_LAUNCHER_HANDOFF_REQUIRED";

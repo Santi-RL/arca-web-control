@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
-import { loadCapabilityRegistry, parseCapabilityManifest, requireHiddenCapability, requireInvoiceCapability } from "./registry.js";
+import { loadCapabilityRegistry, parseCapabilityManifest, requireHiddenCapability, requireInvoiceCapability, requireInvoiceJobVisibleRevalidation, requireVisibleInvoiceRevalidationCapability } from "./registry.js";
 
 const validHiddenManifest = {
   id: "invoice-hidden-test",
@@ -95,6 +98,31 @@ test("el alcance canónico admite preparar Factura C de Servicios y bloquea emis
     currency: "ARS",
     itemCount: 1,
   }), /no coincide con una capacidad registrada/i);
+});
+
+test("la revalidación visible admite únicamente el manifiesto pendiente sin promoverlo", async () => {
+  const capability = await requireVisibleInvoiceRevalidationCapability("invoice-services-single-item");
+  assert.equal(capability.maturity, "automated_to_summary");
+  assert.equal(capability.hiddenAllowed, false);
+  assert.equal(capability.commands.includes("emit-prepared-invoice"), false);
+  assert.equal((await requireInvoiceJobVisibleRevalidation({
+    voucherType: "Factura C",
+    concept: "Servicios",
+    currency: "ARS",
+  }, capability.id)).id, capability.id);
+});
+
+test("la revalidación visible rechaza variantes y manifiestos ya promovidos", async (t) => {
+  await assert.rejects(() => requireInvoiceJobVisibleRevalidation({
+    voucherType: "Factura A",
+    concept: "Servicios",
+    currency: "ARS",
+  }, "invoice-services-single-item"), /alcance cerrado/i);
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "arca-revalidation-registry-"));
+  t.after(async () => await fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, "invoice-hidden-test.json"), JSON.stringify(validHiddenManifest));
+  await assert.rejects(() => requireVisibleInvoiceRevalidationCapability("invoice-hidden-test", root), /estado canónico/i);
 });
 
 test("el alcance runtime rechaza Factura A aunque la sesión sea visible", async () => {
