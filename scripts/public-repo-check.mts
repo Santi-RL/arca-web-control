@@ -272,22 +272,15 @@ export function isAllowedGitNoreplyEmail(value: string): boolean {
 }
 
 function scanReachableGitHistory(repositoryRoot: string): PublicRepositoryIssue[] {
-  const commitsResult = spawnSync("git", ["rev-list", "--all"], {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    windowsHide: true,
-  });
-  if (commitsResult.status !== 0) {
-    throw new Error("No se pudo enumerar el historial alcanzable de Git.");
-  }
-
-  const commits = commitsResult.stdout.split(/\r?\n/).filter(Boolean);
+  const { revisions, syntheticMergeCommits } = listPublicHistoryRevisions(repositoryRoot);
+  const commits = revisions.length === 0 ? [] : listReachableCommits(repositoryRoot, revisions);
+  const treeCommits = [...new Set([...commits, ...syntheticMergeCommits])];
   const blobs = new Map<string, string>();
-  for (const commit of commits) {
+  for (const commit of treeCommits) {
     const treeResult = spawnSync("git", ["ls-tree", "-r", "-z", "--full-tree", commit], {
       cwd: repositoryRoot,
       encoding: "buffer",
+      env: gitHistoryEnvironment(),
       maxBuffer: 64 * 1024 * 1024,
       windowsHide: true,
     });
@@ -309,6 +302,7 @@ function scanReachableGitHistory(repositoryRoot: string): PublicRepositoryIssue[
     const metadataResult = spawnSync("git", ["show", "-s", "--format=%an%x00%ae%x00%cn%x00%ce%x00%B", commit], {
       cwd: repositoryRoot,
       encoding: "utf8",
+      env: gitHistoryEnvironment(),
       maxBuffer: 16 * 1024 * 1024,
       windowsHide: true,
     });
@@ -321,6 +315,24 @@ function scanReachableGitHistory(repositoryRoot: string): PublicRepositoryIssue[
       issues.push({ file: commitMetadataFile, category: "identidad Git sin correo noreply" });
     }
     issues.push(...scanPublicText([authorName, authorEmail, committerName, committerEmail, messageParts.join("\u0000")].join("\n"), commitMetadataFile));
+  }
+
+  const ordinaryCommits = new Set(commits);
+  for (const commit of syntheticMergeCommits) {
+    if (ordinaryCommits.has(commit)) continue;
+    const metadataResult = spawnSync("git", ["show", "-s", "--format=%an%x00%cn%x00%B", commit], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: gitHistoryEnvironment(),
+      maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true,
+    });
+    if (metadataResult.status !== 0) {
+      issues.push({ file: commitMetadataFile, category: "no se pudieron inspeccionar metadatos de un merge sintético" });
+      continue;
+    }
+    const [authorName = "", committerName = "", ...messageParts] = metadataResult.stdout.split("\u0000");
+    issues.push(...scanPublicText([authorName, committerName, messageParts.join("\u0000")].join("\n"), commitMetadataFile));
   }
 
   const tagsResult = spawnSync("git", ["for-each-ref", "--format=%(taggeremail)%00%(contents)%00", "refs/tags"], {
@@ -364,6 +376,7 @@ function scanReachableGitHistory(repositoryRoot: string): PublicRepositoryIssue[
     const blobResult = spawnSync("git", ["cat-file", "blob", objectId], {
       cwd: repositoryRoot,
       encoding: "buffer",
+      env: gitHistoryEnvironment(),
       maxBuffer: 64 * 1024 * 1024,
       windowsHide: true,
     });
@@ -385,6 +398,93 @@ function scanReachableGitHistory(repositoryRoot: string): PublicRepositoryIssue[
     issues.push(...scanPublicText(text, historyFile));
   }
   return issues;
+}
+
+function listPublicHistoryRevisions(repositoryRoot: string): { revisions: string[]; syntheticMergeCommits: string[] } {
+  const shallowResult = spawnSync("git", ["rev-parse", "--is-shallow-repository"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    env: gitHistoryEnvironment(),
+    maxBuffer: 1024 * 1024,
+    windowsHide: true,
+  });
+  if (shallowResult.status !== 0 || shallowResult.stdout.trim() !== "false") {
+    throw new Error("La validación pública exige un historial Git completo, no shallow.");
+  }
+
+  const refsResult = spawnSync("git", ["for-each-ref", "--format=%(refname)"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    env: gitHistoryEnvironment(),
+    maxBuffer: 4 * 1024 * 1024,
+    windowsHide: true,
+  });
+  if (refsResult.status !== 0) throw new Error("No se pudieron enumerar las referencias alcanzables de Git.");
+
+  const revisions: string[] = [];
+  const syntheticMergeCommits: string[] = [];
+  const refNames = refsResult.stdout.split(/\r?\n/).filter(Boolean);
+  for (const refName of refNames) {
+    if (!/^refs\/(?:remotes\/)?pull\/\d+\/merge$/u.test(refName)) {
+      revisions.push(refName);
+      continue;
+    }
+
+    const commitResult = spawnSync("git", ["rev-parse", "--verify", `${refName}^{commit}`], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: gitHistoryEnvironment(),
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    });
+    const parentsResult = spawnSync("git", ["show", "-s", "--format=%P", refName], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      env: gitHistoryEnvironment(),
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    });
+    const commit = commitResult.stdout.trim();
+    const parents = parentsResult.stdout.trim().split(/\s+/).filter(Boolean);
+    const validObjectId = (value: string): boolean => /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(value);
+    if (commitResult.status !== 0 || parentsResult.status !== 0 || !validObjectId(commit) || parents.length !== 2 || !parents.every(validObjectId)) {
+      throw new Error("La referencia sintética de pull request no contiene un merge válido de dos padres.");
+    }
+    syntheticMergeCommits.push(commit);
+    revisions.push(...parents);
+  }
+
+  const headResult = spawnSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    env: gitHistoryEnvironment(),
+    maxBuffer: 1024 * 1024,
+    windowsHide: true,
+  });
+  const head = headResult.status === 0 ? headResult.stdout.trim() : "";
+  if (head && !syntheticMergeCommits.includes(head)) revisions.push(head);
+
+  return {
+    revisions: [...new Set(revisions)],
+    syntheticMergeCommits: [...new Set(syntheticMergeCommits)],
+  };
+}
+
+function listReachableCommits(repositoryRoot: string, revisions: string[]): string[] {
+  const commitsResult = spawnSync("git", ["rev-list", "--stdin"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    env: gitHistoryEnvironment(),
+    input: `${revisions.join("\n")}\n`,
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+  });
+  if (commitsResult.status !== 0) throw new Error("No se pudo enumerar el historial alcanzable de Git.");
+  return commitsResult.stdout.split(/\r?\n/).filter(Boolean);
+}
+
+function gitHistoryEnvironment(): NodeJS.ProcessEnv {
+  return { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
 }
 
 function listGitCandidateFiles(repositoryRoot: string): string[] {

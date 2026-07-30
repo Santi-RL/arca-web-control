@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { checkPublicPath, isAllowedGitNoreplyEmail, redactRepositoryIssuePaths, scanPublicFileName, scanPublicText } from "../../scripts/public-repo-check.mjs";
+import { promisify } from "node:util";
+import { checkPublicPath, isAllowedGitNoreplyEmail, redactRepositoryIssuePaths, scanPublicFileName, scanPublicText, validatePublicRepository } from "../../scripts/public-repo-check.mjs";
 import { validateSkill } from "../../scripts/validate-skill.mjs";
+
+const execFileAsync = promisify(execFile);
 
 test("validate-skill acepta la estructura canónica y referencias directas", async () => {
   const root = await fs.mkdtemp(path.join(process.cwd(), "validator-skill-test-"));
@@ -132,4 +137,111 @@ test("public-repo-check exige identidades Git con correo noreply", () => {
   assert.equal(isAllowedGitNoreplyEmail("contributor@users.noreply.github.com"), true);
   assert.equal(isAllowedGitNoreplyEmail("noreply@github.com"), true);
   assert.equal(isAllowedGitNoreplyEmail("contributor@example.com"), false);
+});
+
+test("public-repo-check inspecciona los padres reales de un merge sintético de PR", async (context) => {
+  const temporaryRoot = await fs.realpath(os.tmpdir());
+  const root = await fs.mkdtemp(path.join(temporaryRoot, "arca-public-history-"));
+  context.after(async () => { await fs.rm(root, { recursive: true, force: true }); });
+
+  const noreplyEmail = "123+contributor@users.noreply.github.com";
+  const personalEmail = ["actor", "correo.invalid.ar"].join("@");
+  const runGit = async (args: string[], email = noreplyEmail): Promise<string> => {
+    const { stdout } = await execFileAsync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      windowsHide: true,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Colaborador Ficticio",
+        GIT_AUTHOR_EMAIL: email,
+        GIT_COMMITTER_NAME: "Colaborador Ficticio",
+        GIT_COMMITTER_EMAIL: email,
+      },
+    });
+    return stdout.trim();
+  };
+
+  await runGit(["init", "-b", "main"]);
+  await fs.writeFile(path.join(root, "fixture.txt"), "contenido ficticio\n", "utf8");
+  await runGit(["add", "fixture.txt"]);
+  await runGit(["commit", "-m", "Crear fixture ficticio"]);
+  const baseCommit = await runGit(["rev-parse", "HEAD"]);
+
+  await runGit(["switch", "-c", "capacidad-ficticia"]);
+  await fs.appendFile(path.join(root, "fixture.txt"), "cambio ficticio\n", "utf8");
+  await runGit(["add", "fixture.txt"]);
+  await runGit(["commit", "-m", "Actualizar fixture ficticio"]);
+  const headCommit = await runGit(["rev-parse", "HEAD"]);
+  const headTree = await runGit(["rev-parse", `${headCommit}^{tree}`]);
+  const safeHeadFixture = "contenido ficticio\ncambio ficticio\n";
+  const syntheticMerge = await runGit([
+    "commit-tree", headTree,
+    "-p", baseCommit,
+    "-p", headCommit,
+    "-m", "Merge sintético de pull request",
+  ], personalEmail);
+  await runGit(["update-ref", "refs/remotes/pull/1/merge", syntheticMerge]);
+
+  const syntheticIssues = await validatePublicRepository(root);
+  assert.equal(syntheticIssues.some((issue) => issue.category.includes("identidad Git")), false);
+  assert.equal(syntheticIssues.some((issue) => issue.category.includes("correo electrónico")), false);
+
+  await fs.writeFile(path.join(root, "fixture.txt"), `${safeHeadFixture}${personalEmail}\n`, "utf8");
+  await runGit(["add", "fixture.txt"]);
+  const unsafeSyntheticTree = await runGit(["write-tree"]);
+  await fs.writeFile(path.join(root, "fixture.txt"), safeHeadFixture, "utf8");
+  await runGit(["add", "fixture.txt"]);
+  const treeLeakMerge = await runGit([
+    "commit-tree", unsafeSyntheticTree,
+    "-p", baseCommit,
+    "-p", headCommit,
+    "-m", "Merge sintético con árbol no permitido",
+  ]);
+  await runGit(["update-ref", "refs/remotes/pull/1/merge", treeLeakMerge]);
+  const treeLeakIssues = await validatePublicRepository(root);
+  assert.equal(treeLeakIssues.some((issue) => issue.category.includes("correo electrónico")), true);
+
+  const messageLeakMerge = await runGit([
+    "commit-tree", headTree,
+    "-p", baseCommit,
+    "-p", headCommit,
+    "-m", `Merge sintético ${personalEmail}`,
+  ]);
+  await runGit(["update-ref", "refs/remotes/pull/1/merge", messageLeakMerge]);
+  const messageLeakIssues = await validatePublicRepository(root);
+  assert.equal(messageLeakIssues.some((issue) => issue.category.includes("correo electrónico")), true);
+
+  await runGit(["update-ref", "refs/remotes/pull/1/merge", syntheticMerge]);
+  await runGit(["update-ref", "refs/remotes/origin/pull/1/merge", syntheticMerge]);
+  const similarRefIssues = await validatePublicRepository(root);
+  assert.equal(similarRefIssues.some((issue) => issue.category.includes("identidad Git")), true);
+  await runGit(["update-ref", "-d", "refs/remotes/origin/pull/1/merge"]);
+
+  const invalidSyntheticTip = await runGit([
+    "commit-tree", headTree,
+    "-p", headCommit,
+    "-m", "Tip sintético de un solo padre",
+  ]);
+  await runGit(["update-ref", "refs/remotes/pull/2/merge", invalidSyntheticTip]);
+  await assert.rejects(
+    () => validatePublicRepository(root),
+    /merge válido de dos padres/i,
+  );
+  await runGit(["update-ref", "-d", "refs/remotes/pull/2/merge"]);
+
+  const detachedCommit = await runGit([
+    "commit-tree", headTree,
+    "-p", headCommit,
+    "-m", "Commit separado no permitido",
+  ], personalEmail);
+  await runGit(["switch", "--detach", detachedCommit]);
+  const detachedIssues = await validatePublicRepository(root);
+  assert.equal(detachedIssues.some((issue) => issue.category.includes("identidad Git")), true);
+  await runGit(["switch", "capacidad-ficticia"]);
+
+  await runGit(["update-ref", "refs/heads/historial-no-permitido", syntheticMerge]);
+  const branchIssues = await validatePublicRepository(root);
+  assert.equal(branchIssues.some((issue) => issue.category.includes("identidad Git")), true);
+  assert.equal(branchIssues.some((issue) => issue.category.includes("correo electrónico")), true);
 });
