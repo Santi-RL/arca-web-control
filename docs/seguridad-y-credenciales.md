@@ -9,7 +9,7 @@
 
 El runtime aplica ACL sin herencia y concede control únicamente al usuario actual y `SYSTEM`. No sincronizarlo con servicios en la nube.
 
-La raíz operativa es fija: `%LOCALAPPDATA%\ManejoARCA`. `ARCA_RUNTIME_ROOT` no es una opción admitida y `NODE_ENV=test` hace que los comandos operativos se detengan; las pruebas automatizadas usan inyección explícita y no pueden desactivar ACL mediante variables heredadas. Los jobs solo pueden indicar `outputDir: "."` o una subcarpeta relativa de `downloads`.
+La raíz operativa es fija: `%LOCALAPPDATA%\ManejoARCA`. `ARCA_RUNTIME_ROOT` no es una opción admitida y `NODE_ENV=test` hace que los comandos operativos se detengan; las pruebas automatizadas usan inyección explícita y no pueden desactivar ACL mediante variables heredadas. `outputDir` es opcional y solo puede indicar una base relativa de `downloads`; la estructura final por emisor se genera automáticamente.
 
 ## Alta, actualización y resolución
 
@@ -90,6 +90,6 @@ El importador restringe la ACL del archivo al usuario actual y `SYSTEM`, no impr
 
 ## Datos operativos
 
-Los jobs reales, perfiles, capturas, PDFs, logs, tokens locales de sesión, candidatos de aprendizaje y ledger son privados. Solo pueden incorporarse a Git código general, documentación sanitizada y fixtures completamente ficticios que no deriven de una operación real.
+Los jobs reales, perfiles, capturas, PDFs, metadatos JSON, logs, tokens locales de sesión, candidatos de aprendizaje y ledger son privados. Solo pueden incorporarse a Git código general, documentación sanitizada y fixtures completamente ficticios que no deriven de una operación real.
 
 Ante un artefacto sensible dentro del repositorio: detener la operación, moverlo al runtime privado, revisar el historial Git antes de publicar y rotar la credencial si existe riesgo de exposición.

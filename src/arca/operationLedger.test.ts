@@ -33,8 +33,10 @@ test("la emisión exige la preparación vigente y aplica transiciones CAS", asyn
   const ledger = new OperationLedger(directory);
   await ledger.claimPreparation("operation-cas-001", "hash", "prepared-new");
   await assert.rejects(() => ledger.claimEmission("operation-cas-001", "prepared-old", "hash"), /no coincide/);
+  await ledger.attachPreparedIssuer("operation-cas-001", "prepared-new", "hash", { cuit: "20000000001", name: "EMISOR FICTICIO" });
   await ledger.claimEmission("operation-cas-001", "prepared-new", "hash");
   await ledger.markEmitted("operation-cas-001", "prepared-new", "hash", { voucherNumber: "1" });
+  assert.deepEqual((await ledger.get("operation-cas-001"))?.issuer, { cuit: "20000000001", name: "EMISOR FICTICIO" });
   await assert.rejects(() => ledger.claimPreparation("operation-cas-001", "hash", "prepared-next"), /emitted/);
 });
 
@@ -53,6 +55,7 @@ test("unknown solo se reconcilia como emitted con evidencia fiscal completa y el
     voucherNumber: "00001-00000042",
     cae: "99999999999999",
     pdfPath: path.resolve(directory, "factura.pdf"),
+    metadataPath: path.resolve(directory, "factura.json"),
     pdfSha256: "a".repeat(64),
   };
   await assert.rejects(() => ledger.reconcileUnknownAsEmitted("operation-reconcile-001", "hash-b", receipt), /mismo job/i);

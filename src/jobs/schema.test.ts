@@ -36,6 +36,16 @@ test("loadInvoiceJob valida v2, centavos y outputDir", async () => {
   assert.equal(job.outputDir, path.join(downloadsRoot, "receptor-ficticio", "2030-06"));
 });
 
+test("outputDir es opcional y usa automáticamente la raíz privada de descargas", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "arca-job-default-output-"));
+  const jobPath = path.join(dir, "job.json");
+  const downloadsRoot = path.join(dir, "runtime", "downloads");
+  const { outputDir: _outputDir, ...withoutOutputDir } = validJob;
+  await fs.writeFile(jobPath, JSON.stringify(withoutOutputDir));
+  const job = await loadInvoiceJob(jobPath, downloadsRoot);
+  assert.equal(job.outputDir, path.resolve(downloadsRoot));
+});
+
 test("loadInvoiceJob rechaza v1 con instrucción de migración", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "arca-job-"));
   const jobPath = path.join(dir, "job.json");

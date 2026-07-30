@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import { ResolvedInvoiceJob } from "../types.js";
-import { buildPreparedInvoicePdfPath, buildPreparedInvoiceSummary, classifyReadyState, invalidatesPreparation, missingExpectedSummarySignals } from "./liveSession.js";
+import { assertEmissionResultMatchesPdf, buildPreparedInvoiceSummary, classifyReadyState, invalidatesPreparation, missingExpectedSummarySignals } from "./liveSession.js";
 
 function invoiceJob(): ResolvedInvoiceJob {
   return {
@@ -71,15 +71,6 @@ function completeControlEvidence() {
   };
 }
 
-test("buildPreparedInvoicePdfPath creates a deterministic sanitized PDF path", () => {
-  const job = invoiceJob();
-
-  assert.equal(
-    buildPreparedInvoicePdfPath(job),
-    path.join(job.outputDir, "factura-c-00001-receptor-de-prueba-s-a-2026-05-30.pdf"),
-  );
-});
-
 test("prepare-invoice invalida cualquier preparación anterior antes de comenzar", () => {
   assert.equal(invalidatesPreparation("prepare-invoice"), true);
   assert.equal(invalidatesPreparation("status"), false);
@@ -87,6 +78,17 @@ test("prepare-invoice invalida cualquier preparación anterior antes de comenzar
   assert.equal(invalidatesPreparation("screenshot"), false);
   assert.equal(invalidatesPreparation("emit-prepared-invoice"), false);
   assert.equal(invalidatesPreparation("revalidate-prepared-invoice"), false);
+});
+
+test("el resultado visible y el PDF deben coincidir en número y CAE", () => {
+  const pdf = { voucherNumber: "00001-00000042", cae: "99999999999999", pageCount: 1 };
+  assert.doesNotThrow(() => assertEmissionResultMatchesPdf({
+    voucherNumber: pdf.voucherNumber,
+    cae: pdf.cae,
+    bodyText: "Comprobante generado",
+  }, pdf));
+  assert.throws(() => assertEmissionResultMatchesPdf({ ...pdf, voucherNumber: `00001-${"00000043"}`, bodyText: "" }, pdf), /número.*no coincide/i);
+  assert.throws(() => assertEmissionResultMatchesPdf({ ...pdf, cae: `${"1111111"}${"1111111"}`, bodyText: "" }, pdf), /CAE.*no coincide/i);
 });
 
 test("buildPreparedInvoiceSummary conserva identidad real del emisor sin fallback de credencial", () => {

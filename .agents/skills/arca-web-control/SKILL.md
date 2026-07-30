@@ -35,8 +35,9 @@ description: Operar de forma experimental y supervisada la web de ARCA en Window
 5. No ejecutar `emit-prepared-invoice`: el manifiesto vigente mantiene la emisión de producción deshabilitada hasta una nueva validación visible y promoción humana.
 6. Para revalidar la implementación irreversible pendiente, iniciar una sesión visible exclusiva con `--revalidate-irreversible invoice-services-single-item`. Después de mostrar el resumen, exigir un nuevo mensaje humano exactamente igual a `EMITIR` y ejecutar una sola vez `revalidate-prepared-invoice <preparedInvoiceId> EMITIR`. No releer ni sustituir el job y bloquear reintentos ante estado `unknown`.
 7. La revalidación futura debe comprobar que, después de `Comprobante Generado`, se capture la descarga directa iniciada por `Imprimir...`, se valide el PDF y se extraigan número/CAE antes de marcar `emitted`.
-8. Para Servicios, calcular el vencimiento cinco días corridos después de la emisión si el usuario no indica otro; dejar actividad, referencia comercial y unidad de medida sin selección por defecto. Si ARCA normaliza la unidad a `unidades` en el resumen, verificarla como salida del portal.
-9. Leer `docs/regimenes-especificos.md` antes de informar una actividad asociada. Si el job declara un régimen específico, exigir que régimen y actividad coincidan con el perfil privado del CUIT emisor; los jobs v2 históricos con `activity` explícita siguen siendo compatibles.
+8. Publicar el PDF y su JSON de metadatos únicamente después de validarlos, bajo `downloads\Emisores\<CUIT formateado - nombre>\Comprobantes Emitidos\<AAAA>\<MM>`. Usar el CUIT como identidad, reutilizar una única carpeta existente y bloquear duplicados o colisiones; nunca sobrescribir.
+9. Para Servicios, calcular el vencimiento cinco días corridos después de la emisión si el usuario no indica otro; dejar actividad, referencia comercial y unidad de medida sin selección por defecto. Si ARCA normaliza la unidad a `unidades` en el resumen, verificarla como salida del portal.
+10. Leer `docs/regimenes-especificos.md` antes de informar una actividad asociada. Si el job declara un régimen específico, exigir que régimen y actividad coincidan con el perfil privado del CUIT emisor; los jobs v2 históricos con `activity` explícita siguen siendo compatibles.
 
 ## Aprendizaje durable
 

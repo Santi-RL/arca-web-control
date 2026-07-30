@@ -21,8 +21,7 @@ Ejemplo sintético:
   "billingPeriodTo": "2030-06-30",
   "saleCondition": "Transferencia Bancaria",
   "description": "Servicio de prueba",
-  "amount": "123456.78",
-  "outputDir": "."
+  "amount": "123456.78"
 }
 ```
 
@@ -35,5 +34,6 @@ Reglas:
 - Usar CUIT válidos de once dígitos y el CUIT canónico del emisor como `issuerKey`.
 - Si falta el vencimiento, Servicios aplica cinco días corridos desde la emisión.
 - Dejar actividad, referencia comercial y unidad de medida vacías salvo indicación expresa.
-- Usar `outputDir: "."` para la carpeta privada predeterminada o una subcarpeta relativa, por ejemplo `"cliente-ficticio/2030"`. Se rechazan rutas absolutas, UNC y segmentos `..`; ningún job puede guardar PDFs fuera de `%LOCALAPPDATA%\ManejoARCA\downloads`.
+- Omitir `outputDir` para usar la base privada predeterminada. Por compatibilidad puede indicar `"."` o una subcarpeta relativa de `downloads`, pero solo cambia la base: la estructura final por emisor, año y mes siempre se genera automáticamente. Se rechazan rutas absolutas, UNC y segmentos `..`.
+- Después de validar el PDF, número, CAE y hash, archivar `Nombre - FC-C - 00001-00000042.pdf` junto a un JSON privado de metadatos. Facturas, notas de crédito y notas de débito usan códigos cerrados `FC`, `NC` y `ND` más la letra del comprobante.
 - Rechazar Facturas A/B, Productos, conceptos mixtos, múltiples ítems, cualquier moneda distinta de ARS, notas, recibos y lotes como variantes no aprendidas. En ARCA debe existir un único checkbox visible `Moneda Extranjera` y permanecer desmarcado.

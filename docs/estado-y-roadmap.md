@@ -17,6 +17,7 @@ La plataforma soportada es Windows 10/11. Las credenciales canónicas viven en e
 - Ledger con estados `prepared`, `emitting`, `emitted`, `failed_before_emit` y `unknown`.
 - Selectores exactos, rechazo de ambigüedades y validación semántica de filas y secciones del resumen contra controles reales.
 - Captura y validación del PDF, extracción local de número/CAE y reconciliación explícita de estados inciertos.
+- Archivo privado por CUIT emisor con staging, publicación sin sobrescritura, nombres legibles, metadatos JSON y organización anual/mensual.
 - Sesiones con lock, estado atómico, cierre controlado y detección de credenciales inválidas, captcha y expiración.
 - Aprendizaje visible que omite secretos y valores de formularios y se detiene antes de acciones irreversibles.
 - Manifiestos versionados, sincronización de referencias, skill local y MCP sin herramientas genéricas de clic en producción.
@@ -42,7 +43,7 @@ Una Factura C de Servicios fue emitida en Chrome visible después de mostrar el 
 
 La interfaz inició una descarga directa al pulsar `Imprimir...`. La estrategia anterior no capturó ese evento y dejó correctamente el ledger en `unknown`. El PDF oficial se recuperó, validó y reconcilió localmente como `emitted`, sin volver a emitir. Los identificadores, el PDF, su hash y el ledger permanecen exclusivamente en el almacenamiento privado.
 
-El código vigente escucha la descarga antes del único clic, valida el PDF y extrae número/CAE. Ese tramo nuevo todavía requiere una próxima validación visible completa; por eso `lastValidatedVisible` continúa en `false`, la madurez regresó a `automated_to_summary` y tanto la emisión como el modo oculto permanecen deshabilitados por el manifiesto.
+El código vigente escucha la descarga antes del único clic, la recibe en staging privado, valida el PDF, extrae número/CAE, calcula el hash y publica PDF más metadatos en el archivo canónico del emisor. Ese tramo nuevo todavía requiere una próxima validación visible completa; por eso `lastValidatedVisible` continúa en `false`, la madurez regresó a `automated_to_summary` y tanto la emisión como el modo oculto permanecen deshabilitados por el manifiesto.
 
 Para resolver la circularidad sin falsear la madurez, existe un carril de revalidación visible explícito. Solo puede habilitarse al iniciar una sesión exclusiva para la capacidad pendiente, exige un `preparedInvoiceId` vigente y la confirmación exacta `EMITIR`, reutiliza el mismo flujo irreversible y mantiene `unknown` como resultado terminal ante incertidumbre. Este carril no habilita la emisión productiva ni modifica el manifiesto automáticamente.
 
@@ -87,7 +88,7 @@ El validador público no encontró incidencias en el árbol saneado y bloqueó �
 
 ## Próximos hitos
 
-1. Completar una nueva corrida visible de la captura automática del PDF y verificar ledger, número, CAE y hash.
+1. Completar una nueva corrida visible de la captura automática del PDF y verificar archivo por emisor, metadatos, ledger, número, CAE y hash.
 2. Evaluar `fast_path` solamente después de evidencia repetida y aprobación humana; `hiddenAllowed` no cambia de forma automática.
 3. Aprender y validar la consulta de comprobantes emitidos antes de exponer `arca_query_issued_invoices`.
 4. Incorporar otros tipos de comprobante, conceptos o múltiples ítems únicamente como capacidades separadas y supervisadas.

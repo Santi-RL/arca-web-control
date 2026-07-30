@@ -14,7 +14,8 @@ export type LedgerEntry = {
   preparedInvoiceId?: string;
   jobHash: string;
   updatedAt: string;
-  receipt?: { voucherNumber?: string; cae?: string; pdfPath?: string; pdfSha256?: string };
+  issuer?: { cuit: string; name: string };
+  receipt?: { voucherNumber?: string; cae?: string; pdfPath?: string; metadataPath?: string; pdfSha256?: string };
   detail?: string;
 };
 
@@ -46,6 +47,19 @@ export class OperationLedger {
     return await this.transition(operationId, preparedInvoiceId, jobHash, "prepared", "emitting");
   }
 
+  async attachPreparedIssuer(operationId: string, preparedInvoiceId: string, jobHash: string, issuer: NonNullable<LedgerEntry["issuer"]>): Promise<LedgerEntry> {
+    if (!/^\d{11}$/u.test(issuer.cuit) || !issuer.name.trim()) {
+      throw new Error("La identidad del emisor preparada no es válida para el ledger.");
+    }
+    return await this.withOperationLock(operationId, async () => {
+      const existing = await this.readValidated(operationId);
+      if (!existing || existing.status !== "prepared" || existing.jobHash !== jobHash || existing.preparedInvoiceId !== preparedInvoiceId) {
+        throw new Error(`La operación ${operationId} no admite asociar la identidad del emisor; la preparación vigente no coincide.`);
+      }
+      return await this.write({ ...existing, issuer: { cuit: issuer.cuit, name: issuer.name.trim() } });
+    });
+  }
+
   async markFailedBeforeEmit(operationId: string, preparedInvoiceId: string, jobHash: string, detail: string): Promise<LedgerEntry> {
     return await this.transition(operationId, preparedInvoiceId, jobHash, "prepared", "failed_before_emit", { detail });
   }
@@ -74,6 +88,7 @@ export class OperationLedger {
         status: "emitted",
         preparedInvoiceId: existing.preparedInvoiceId,
         jobHash,
+        issuer: existing.issuer,
         receipt,
       });
     });
@@ -96,7 +111,7 @@ export class OperationLedger {
       if (!existing || existing.status !== expected || existing.jobHash !== jobHash || existing.preparedInvoiceId !== preparedInvoiceId) {
         throw new Error(`La operación ${operationId} no puede pasar de ${existing?.status ?? "inexistente"} a ${status}; la preparación vigente no coincide.`);
       }
-      return await this.write({ operationId, status, preparedInvoiceId, jobHash, ...extra });
+      return await this.write({ operationId, status, preparedInvoiceId, jobHash, issuer: existing.issuer, ...extra });
     });
   }
 
@@ -171,5 +186,6 @@ function assertReconciliationReceipt(receipt: Receipt): void {
   if (!/^\d{5}-\d{8}$/.test(receipt.voucherNumber ?? "")) throw new Error("La reconciliación exige un número de comprobante verificable.");
   if (!/^\d{14}$/.test(receipt.cae ?? "")) throw new Error("La reconciliación exige un CAE verificable.");
   if (!receipt.pdfPath || !path.isAbsolute(receipt.pdfPath)) throw new Error("La reconciliación exige una ruta PDF absoluta.");
+  if (!receipt.metadataPath || !path.isAbsolute(receipt.metadataPath)) throw new Error("La reconciliación exige una ruta de metadatos absoluta.");
   if (!/^[a-f0-9]{64}$/i.test(receipt.pdfSha256 ?? "")) throw new Error("La reconciliación exige un hash SHA-256 verificable.");
 }

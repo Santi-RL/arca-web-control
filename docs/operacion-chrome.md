@@ -24,7 +24,7 @@ El modo `production-hidden` está deshabilitado. No se automatizan captchas ni s
 3. Mantener el job real exclusivamente como archivo `.json` regular dentro de `%LOCALAPPDATA%\ManejoARCA\jobs\private`.
 4. Partir del contrato ficticio [jobs/factura.example.json](../jobs/factura.example.json) y guardar el job real únicamente en `%LOCALAPPDATA%\ManejoARCA\jobs\private`; la sesión rechaza otras ubicaciones y enlaces.
 
-En el job, `outputDir` es `"."` o una subcarpeta relativa de `%LOCALAPPDATA%\ManejoARCA\downloads`. Las rutas absolutas, UNC y los segmentos `..` se rechazan; un job nunca elige una carpeta arbitraria del equipo.
+`outputDir` es opcional. Si se omite, usa la raíz privada `downloads`; por compatibilidad puede definir una subcarpeta relativa, pero nunca una ruta absoluta, UNC o con segmentos `..`. La carpeta definitiva no se decide por factura: se genera automáticamente por CUIT emisor, tipo de artefacto, año y mes.
 
 Las claves se leen únicamente desde el Administrador de credenciales de Windows. No deben aparecer en el chat, argumentos, archivos del repositorio, logs ni capturas.
 
@@ -79,9 +79,27 @@ npm run arca:session:cmd -- revalidate-prepared-invoice <preparedInvoiceId> EMIT
 
 La preparación vigente, su huella de página, el job inmutable, el alcance cerrado y el ledger se verifican nuevamente antes del primer clic. Ante cualquier falla posterior, el estado queda `unknown`, la preparación se invalida y no se reintenta. Una corrida exitosa habilita la revisión humana y la posterior actualización del manifiesto; nunca lo promueve automáticamente.
 
+## Archivo privado de comprobantes
+
+La descarga directa se recibe primero en `downloads\.staging` mediante un nombre derivado del hash del `operationId`. Después de validar el PDF contra el job, extraer un único número y CAE, comprobar la coincidencia con la pantalla y calcular SHA-256, se publica sin sobrescritura en:
+
+```text
+downloads\Emisores\20-00000000-1 - EMISOR FICTICIO\Comprobantes Emitidos\2030\06\
+  EMISOR FICTICIO - FC-C - 00001-00000042.pdf
+  EMISOR FICTICIO - FC-C - 00001-00000042.json
+```
+
+El CUIT es la identidad canónica. El nombre proviene del resumen verificado de ARCA y funciona solo como etiqueta: si ya existe una única carpeta con ese CUIT se reutiliza aunque la etiqueta haya cambiado; si existen varias, la operación se detiene. El JSON lateral conserva `operationId`, hash del job, emisor, tipo y código de comprobante, punto de venta, número, fecha, CAE, hash del PDF y fecha de archivo. No incluye la clave fiscal ni cookies, tokens o perfiles.
+
+Los códigos de archivo son cerrados: `FC` para factura, `NC` para nota de crédito y `ND` para nota de débito, seguidos por la letra `A`, `B` o `C`. Esta nomenclatura no amplía la capacidad fiscal vigente: actualmente solo se opera Factura C.
+
+La misma carpeta canónica del emisor queda preparada para futuras capacidades de descarga. Esas capacidades deberán crear sus directorios recién al guardar el primer artefacto y usar `Datos Descargados\<tipo>\AAAA\MM`; el tipo será un identificador cerrado y documentado por cada capacidad, nunca un nombre libre proveniente de la web. La estructura no se crea por el solo hecho de que el emisor exista en el Administrador de credenciales.
+
+Un mismo nombre y hash es idempotente. Un mismo nombre con PDF o metadatos diferentes se considera una colisión y nunca se sobrescribe. El ledger solo pasa a `emitted` después de publicar y verificar ambos archivos; conserva sus rutas, número, CAE y SHA-256.
+
 Cuando una versión futura sea promovida nuevamente, la autorización válida será únicamente el texto exacto `EMITIR`, recibido después de mostrar y revisar el resumen. El CLI puede validar el literal y el `preparedInvoiceId`, pero no la autoría del mensaje. La capa agente nunca debe sintetizar `EMITIR`, convertir una paráfrasis en esa palabra ni reutilizar una autorización de otra preparación.
 
-Si una revalidación supervisada futura mostrara `Comprobante Generado` pero fallara la obtención o validación del PDF, la operación deberá quedar en `unknown` y nunca emitirse otra vez. La recuperación seguirá exigiendo un PDF oficial y confirmación explícita:
+Si una revalidación supervisada futura mostrara `Comprobante Generado` pero fallara la obtención, validación o publicación del PDF y sus metadatos, la operación deberá quedar en `unknown` y nunca emitirse otra vez. La recuperación seguirá exigiendo un PDF oficial, la identidad del emisor conservada en el ledger y confirmación explícita:
 
 ```powershell
 npm run arca:invoice:recover-pdf -- --job "<RUTA_PRIVADA_JOB_V2>" --source "<PDF_OFICIAL>" --dry-run

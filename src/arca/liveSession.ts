@@ -22,7 +22,7 @@ import { getRuntimePaths } from "../config/runtimePaths.js";
 import { resolvePrivateInvoiceJobPath } from "../config/privateJobs.js";
 import { resolveCredentialRoutingIdentity } from "../config/env.js";
 import { measureArcaPerformance } from "./performance.js";
-import { downloadGeneratedInvoicePdf, inspectArcaInvoicePdf } from "./invoicePdf.js";
+import { downloadGeneratedInvoicePdf, inspectArcaInvoicePdf, type ArcaInvoicePdfEvidence } from "./invoicePdf.js";
 import { sanitizeErrorMessage } from "./publicErrors.js";
 import { requireHiddenCapability, requireInvoiceJobCapability, requireInvoiceJobVisibleRevalidation, requireVisibleInvoiceRevalidationCapability } from "../capabilities/registry.js";
 import {
@@ -40,6 +40,7 @@ import {
 } from "./officialUrls.js";
 import { commercialAddressesMatch } from "./recipientCommercialAddress.js";
 import { assertIssuerEvidenceMatches, extractIssuerSummaryEvidence } from "./issuerEvidence.js";
+import { buildInvoiceArtifactPaths, buildInvoiceStagingPdfPath, publishInvoiceArtifacts } from "./invoiceArchive.js";
 
 const portalUrl = "https://portalcf.cloud.afip.gob.ar/portal/app/";
 
@@ -443,6 +444,10 @@ export class ArcaLiveSession {
         validatePreparedSummary(candidateSummary, job);
         return candidateSummary;
       });
+      await this.ledger.attachPreparedIssuer(job.operationId, preparedInvoiceId, jobHash, {
+        cuit: summary.issuerCuit,
+        name: summary.issuer,
+      });
       const state = await measureArcaPerformance("prepare_state_fingerprint", async () => this.preparedInvoices.create({
           preparedInvoiceId,
           capabilityId,
@@ -470,7 +475,7 @@ export class ArcaLiveSession {
       throw error;
     }
   }
-  private async emitPreparedInvoice(preparedInvoiceId: string, visibleRevalidation: boolean): Promise<{ message: string; operationId: string; summary: PreparedInvoiceSummary; pdfPath: string; pdfSha256: string; voucherNumber?: string; cae?: string; screenshotPath: string }> {
+  private async emitPreparedInvoice(preparedInvoiceId: string, visibleRevalidation: boolean): Promise<{ message: string; operationId: string; summary: PreparedInvoiceSummary; pdfPath: string; metadataPath: string; pdfSha256: string; voucherNumber: string; cae: string; screenshotPath: string }> {
     const candidate = this.preparedInvoices.current;
     assertOfficialArcaRcelUrl(this.page.url(), "la lectura del resumen preparado");
     const body = await this.page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
@@ -508,8 +513,8 @@ export class ArcaLiveSession {
       }
       validatePreparedSummary(state.summary, state.job);
       const runtime = getRuntimePaths();
-      const pdfTarget = buildPreparedInvoicePdfPath(state.job);
-      pdfReservation = await reservePrivatePdfDestination(pdfTarget, runtime.downloads, runtime.root);
+      const stagingPdfTarget = buildInvoiceStagingPdfPath(state.operationId, runtime.downloads);
+      pdfReservation = await reservePrivatePdfDestination(stagingPdfTarget, runtime.downloads, runtime.root);
       result = await executeControlledEmission(this.page, {
         onIrreversible: async () => {
           await this.ledger.claimEmission(state.operationId, preparedInvoiceId, state.jobHash);
@@ -517,8 +522,8 @@ export class ArcaLiveSession {
         },
       });
       const screenshotPath = await this.screenshot();
-      const pdfPath = await this.savePrintPdf(pdfReservation.path, runtime.downloads, runtime.root, pdfReservation);
-      const pdfEvidence = await inspectArcaInvoicePdf(pdfPath, {
+      const stagingPdfPath = await this.savePrintPdf(pdfReservation.path, runtime.downloads, runtime.root, pdfReservation);
+      const pdfEvidence = await inspectArcaInvoicePdf(stagingPdfPath, {
         voucherType: state.job.voucherType,
         pointOfSale: state.job.pointOfSale,
         issueDate: formatDateForArca(state.job.date),
@@ -526,14 +531,24 @@ export class ArcaLiveSession {
         description: state.job.description,
         amountCents: state.job.amountCents,
       });
-      const pdfSha256 = await sha256File(pdfPath);
-      const voucherNumber = result.voucherNumber ?? pdfEvidence.voucherNumber;
-      const cae = result.cae ?? pdfEvidence.cae;
+      const pdfSha256 = await sha256File(stagingPdfPath);
+      assertEmissionResultMatchesPdf(result, pdfEvidence);
+      const voucherNumber = pdfEvidence.voucherNumber;
+      const cae = pdfEvidence.cae;
+      const artifacts = await buildInvoiceArtifactPaths(state.job, {
+        cuit: state.summary.issuerCuit,
+        name: state.summary.issuer,
+      }, { voucherNumber, cae, pdfSha256 }, state.jobHash);
+      const published = await publishInvoiceArtifacts(stagingPdfPath, artifacts, runtime.downloads, runtime.root);
       await this.ledger.markEmitted(state.operationId, preparedInvoiceId, state.jobHash, {
-        voucherNumber, cae, pdfPath, pdfSha256,
+        voucherNumber,
+        cae,
+        pdfPath: published.pdfPath,
+        metadataPath: published.metadataPath,
+        pdfSha256,
       });
       this.preparedInvoices.invalidate();
-      return { message: "Factura emitida y PDF guardado.", operationId: state.operationId, summary: state.summary, pdfPath, pdfSha256, voucherNumber, cae, screenshotPath };
+      return { message: "Factura emitida; PDF y metadatos archivados.", operationId: state.operationId, summary: state.summary, pdfPath: published.pdfPath, metadataPath: published.metadataPath, pdfSha256, voucherNumber, cae, screenshotPath };
     } catch (error) {
       const detail = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
       const transition = irreversibleStarted
@@ -1125,28 +1140,20 @@ function formatExpectedSummarySignal(signal: ExpectedSummarySignal): string {
   return Array.isArray(signal) ? signal.join(" / ") : signal;
 }
 
-export function buildPreparedInvoicePdfPath(job: ResolvedInvoiceJob): string {
-  const fileName = [
-    job.voucherType ?? "comprobante",
-    job.pointOfSale ?? "pv",
-    job.recipientName ?? job.recipientCuit,
-    job.date,
-  ].map(sanitizeFilePart).filter(Boolean).join("-").toLowerCase() + ".pdf";
-
-  return path.join(job.outputDir, fileName);
-}
-
-function sanitizeFilePart(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-zA-Z0-9]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 function extractAfter(value: string, pattern: RegExp): string | undefined {
   return value.match(pattern)?.[1]?.trim();
+}
+
+export function assertEmissionResultMatchesPdf(
+  result: Awaited<ReturnType<typeof executeControlledEmission>>,
+  pdf: ArcaInvoicePdfEvidence,
+): void {
+  if (result.voucherNumber && result.voucherNumber !== pdf.voucherNumber) {
+    throw new Error("El número mostrado por ARCA no coincide con el comprobante extraído del PDF.");
+  }
+  if (result.cae && result.cae !== pdf.cae) {
+    throw new Error("El CAE mostrado por ARCA no coincide con el comprobante extraído del PDF.");
+  }
 }
 
 function onlyDigits(value: string): string {

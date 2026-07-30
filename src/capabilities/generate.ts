@@ -21,7 +21,7 @@ const commands = [
   ["arca:capability:promote", "Promueve madurez con aprobación humana explícita."],
   ["arca:mcp", "Inicia el MCP local stdio."],
   ["arca:issuer:profile", "Consulta o configura regímenes específicos por CUIT sin mezclar datos con la credencial."],
-  ["arca:invoice:recover-pdf", "Recupera un PDF descargado, valida número/CAE y reconcilia un ledger unknown con confirmación exacta."],
+  ["arca:invoice:recover-pdf", "Recupera un PDF, valida número/CAE/hash, publica PDF y metadatos en el archivo canónico y reconcilia un ledger unknown."],
 ] as const;
 
 export function renderCapabilities(manifests: CapabilityManifest[]): string {

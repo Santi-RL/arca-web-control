@@ -41,13 +41,15 @@ export type InvoiceJob = {
   description: string;
   unit?: string;
   amount: string;
-  outputDir: string;
+  /** Base privada opcional. La estructura final por emisor se genera automáticamente. */
+  outputDir?: string;
 };
 
-export type ResolvedInvoiceJob = Omit<InvoiceJob, "amount"> & {
+export type ResolvedInvoiceJob = Omit<InvoiceJob, "amount" | "outputDir"> & {
   amount: number;
   amountCents: number;
   amountDecimal: string;
+  outputDir: string;
 };
 
 export type RunInvoiceOptions = {

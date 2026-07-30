@@ -24,6 +24,7 @@ Leer `docs/estado-y-roadmap.md`, `docs/operacion-chrome.md`, `docs/protocolo-apr
 - No emitir en la versión vigente. Si una versión futura vuelve a habilitar la acción, no emitir sin confirmación humana exacta `EMITIR`.
 - Ante captcha, selector ambiguo, campo inesperado, pantalla distinta o estado `unknown`, detenerse, capturar evidencia y consultar al usuario. Ante `403` o sesión expirada, no reenviar el formulario: renovar la autenticación y reconstruir el borrador. No adivinar equivalencias.
 - Mantener jobs reales, logs, perfiles, capturas, aprendizaje y ledger en `%LOCALAPPDATA%\ManejoARCA`, nunca en Git.
+- Archivar PDFs y metadatos únicamente bajo `downloads\Emisores\<CUIT formateado - nombre>\Comprobantes Emitidos\<AAAA>\<MM>`. Resolver siempre por CUIT, crear carpetas solo al publicar un artefacto y no sobrescribir colisiones.
 - `production-hidden` solo se admite si el manifiesto declara `maturity: fast_path` y `hiddenAllowed: true`. No modificar esa condición manualmente para saltear validaciones.
 
 ## Aprendizaje completo

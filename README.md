@@ -16,6 +16,7 @@ Actualmente el alcance implementado se limita a una única capacidad fiscal:
 - Ejecución visible en Windows.
 - Preparación automatizada hasta el resumen.
 - Implementación de emisión y recuperación del PDF conservada para revalidación, pero deshabilitada por el manifiesto vigente.
+- Archivo privado estandarizado por CUIT emisor, con PDF, metadatos JSON, hash y publicación sin sobrescritura.
 
 La capacidad se encuentra en madurez `automated_to_summary`. Hubo una emisión real controlada con una versión anterior del tramo de descarga, pero la captura automática vigente del PDF todavía requiere una nueva validación visible. Por ese motivo, `lastValidatedVisible` permanece en `false`; `emit-prepared-invoice` y el modo oculto están deshabilitados por el manifiesto.
 
@@ -46,7 +47,7 @@ El núcleo público está compuesto por:
 
 La skill está diseñada para Codex. Después de abrir la raíz del repositorio en Codex, invóquela explícitamente con `$arca-web-control` para que el agente cargue sus reglas operativas. La skill no es autónoma: depende del CLI versionado, las dependencias y los manifiestos de este repositorio. Otro agente puede adaptarla si sabe interpretar `SKILL.md` y ejecutar ese CLI local, pero esa compatibilidad no está garantizada.
 
-Las personalizaciones de cada instalación no forman parte del proyecto público. Credenciales, emisores, perfiles de regímenes, jobs reales, sesiones, aprendizaje crudo, capturas, logs, ledger y PDFs deben permanecer en `%LOCALAPPDATA%\ManejoARCA` o en el Administrador de credenciales de Windows, nunca en Git.
+Las personalizaciones de cada instalación no forman parte del proyecto público. Credenciales, emisores, perfiles de regímenes, jobs reales, sesiones, aprendizaje crudo, capturas, logs, ledger, PDFs y metadatos deben permanecer en `%LOCALAPPDATA%\ManejoARCA` o en el Administrador de credenciales de Windows, nunca en Git. Los comprobantes validados se organizan bajo `downloads\Emisores\<CUIT - nombre>\Comprobantes Emitidos\<AAAA>\<MM>`.
 
 ## Principios de seguridad
 

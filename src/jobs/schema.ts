@@ -43,7 +43,7 @@ export const invoiceJobV2Schema = z.object({
   description: z.string().trim().min(1).max(1000),
   unit: z.string().trim().min(1).optional(),
   amount: decimalAmount,
-  outputDir: outputSubdirectory,
+  outputDir: outputSubdirectory.optional().default("."),
 }).strict().superRefine((job, context) => {
   if (job.billingPeriodFrom && job.billingPeriodTo && job.billingPeriodFrom > job.billingPeriodTo) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["billingPeriodTo"], message: "El fin del período no puede ser anterior al inicio." });

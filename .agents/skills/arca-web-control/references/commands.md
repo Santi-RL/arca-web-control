@@ -20,6 +20,6 @@ Archivo generado desde el registro de comandos del proyecto. No editar manualmen
 - `npm run arca:capability:promote`: Promueve madurez con aprobación humana explícita.
 - `npm run arca:mcp`: Inicia el MCP local stdio.
 - `npm run arca:issuer:profile`: Consulta o configura regímenes específicos por CUIT sin mezclar datos con la credencial.
-- `npm run arca:invoice:recover-pdf`: Recupera un PDF descargado, valida número/CAE y reconcilia un ledger unknown con confirmación exacta.
+- `npm run arca:invoice:recover-pdf`: Recupera un PDF, valida número/CAE/hash, publica PDF y metadatos en el archivo canónico y reconcilia un ledger unknown.
 
 La emisión está deshabilitada por los manifiestos vigentes. `emit-prepared-invoice` no debe ejecutarse hasta una revalidación visible y promoción humana.
