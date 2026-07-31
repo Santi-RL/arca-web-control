@@ -67,7 +67,7 @@ test("selecciona el domicilio completo y no una coincidencia parcial", async () 
   try {
     const page = await openFixture(browser, `
       <label>Domicilio Comercial
-        <select id="domicilioreceptor" name="domicilioReceptor">
+        <select id="domicilioreceptorcombo" name="domicilioReceptorCombo">
           <option value="">seleccionar...</option>
           <option value="100">Avenida Ficticia 100</option>
           <option value="10">Avenida Ficticia 10</option>
@@ -76,7 +76,7 @@ test("selecciona el domicilio completo y no una coincidencia parcial", async () 
       </label>
     `);
     await ensureCommercialAddress(page, invoiceJob("Avenida Ficticia 10"), { strictSelectors: true, interactive: false, manualIntervention: false });
-    assert.equal(await page.locator("#domicilioreceptor").inputValue(), "10");
+    assert.equal(await page.locator("#domicilioreceptorcombo").inputValue(), "10");
     await page.close();
   } finally {
     await browser.close();

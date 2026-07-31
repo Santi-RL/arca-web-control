@@ -1,7 +1,7 @@
 import { Locator, Page } from "playwright";
 import { assertOfficialArcaRcelUrl } from "./officialUrls.js";
 
-export const recipientCommercialAddressSelect = "#domicilioreceptor, select[name='domicilioReceptor' i]";
+export const recipientCommercialAddressSelect = "#domicilioreceptor, #domicilioreceptorcombo, select[name='domicilioReceptor' i], select[name='domicilioReceptorCombo' i]";
 export const recipientCommercialAddressInput = "input[name*='domicilio' i], input[id*='domicilio' i]";
 
 export type CommercialAddressMatch = "exact" | "caba-equivalent" | "none";
