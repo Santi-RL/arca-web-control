@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import { ResolvedInvoiceJob } from "../types.js";
-import { assertEmissionResultMatchesPdf, buildPreparedInvoiceSummary, classifyReadyState, invalidatesPreparation, missingExpectedSummarySignals, redactSessionStateForLog } from "./liveSession.js";
+import { assertEmissionResultMatchesPdf, buildPreparedInvoiceSummary, classifyReadyState, invalidatesPreparation, missingExpectedSummarySignals, redactSessionStateForLog, validatePreparedSummary } from "./liveSession.js";
 
 function invoiceJob(): ResolvedInvoiceJob {
   return {
@@ -135,6 +135,26 @@ test("buildPreparedInvoiceSummary conserva identidad real del emisor sin fallbac
   assert.equal(summary.issuerCuit, "20000000001");
   assert.equal(summary.issuerCommercialAddress, "Avenida Ficción 100, CABA");
   assert.equal(summary.rawContainsExpected, true);
+});
+
+test("validatePreparedSummary compara las fechas ISO del job con el formato visible de ARCA", () => {
+  const job = invoiceJob();
+  const summary = buildPreparedInvoiceSummary(
+    completeSummaryBody(),
+    job,
+    completeControlEvidence(),
+    { sessionIssuerKey: "20000000001", credentialCuit: "20000000001" },
+  );
+
+  assert.doesNotThrow(() => validatePreparedSummary(summary, job));
+  assert.throws(
+    () => validatePreparedSummary({ ...summary, billingPeriodTo: "30/05/2026" }, job),
+    /período hasta/i,
+  );
+  assert.throws(
+    () => validatePreparedSummary({ ...summary, dueDate: "06/06/2026" }, job),
+    /vencimiento/i,
+  );
 });
 
 test("buildPreparedInvoiceSummary no acepta que un CUIT global o receptor sustituya al control Representando a", () => {

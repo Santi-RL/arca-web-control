@@ -1060,7 +1060,7 @@ export function buildPreparedInvoiceSummary(
   };
 }
 
-function validatePreparedSummary(summary: PreparedInvoiceSummary, job: ResolvedInvoiceJob): void {
+export function validatePreparedSummary(summary: PreparedInvoiceSummary, job: ResolvedInvoiceJob): void {
   const normalizedExpectedCuit = onlyDigits(job.issuerKey);
   if (!summary.issuer.trim() || !summary.issuerCommercialAddress.trim() || onlyDigits(summary.issuerCuit) !== normalizedExpectedCuit) {
     throw new Error("El resumen preparado no contiene una identidad del emisor válida y coincidente.");
@@ -1094,9 +1094,9 @@ function validatePreparedSummary(summary: PreparedInvoiceSummary, job: ResolvedI
   if (!sameSummaryText(summary.voucherType, job.voucherType)) mismatched.push("tipo de comprobante");
   if (canonicalPointOfSaleForSummary(summary.pointOfSale) !== canonicalPointOfSaleForSummary(job.pointOfSale)) mismatched.push("punto de venta");
   if (!sameSummaryText(summary.concept, job.concept)) mismatched.push("concepto");
-  if (!sameSummaryText(summary.billingPeriodFrom, job.billingPeriodFrom)) mismatched.push("período desde");
-  if (!sameSummaryText(summary.billingPeriodTo, job.billingPeriodTo)) mismatched.push("período hasta");
-  if (!sameSummaryText(summary.dueDate, job.dueDate)) mismatched.push("vencimiento");
+  if (!sameSummaryText(summary.billingPeriodFrom, job.billingPeriodFrom ? formatDateForArca(job.billingPeriodFrom) : undefined)) mismatched.push("período desde");
+  if (!sameSummaryText(summary.billingPeriodTo, job.billingPeriodTo ? formatDateForArca(job.billingPeriodTo) : undefined)) mismatched.push("período hasta");
+  if (!sameSummaryText(summary.dueDate, job.dueDate ? formatDateForArca(job.dueDate) : undefined)) mismatched.push("vencimiento");
   if (onlyDigits(summary.recipientCuit) !== onlyDigits(job.recipientCuit)) mismatched.push("CUIT receptor");
   if (job.recipientName && !sameSummaryText(summary.recipientName, job.recipientName)) mismatched.push("razón social del receptor");
   if (!sameSummaryText(summary.recipientVatCondition, job.recipientVatCondition)) mismatched.push("condición frente al IVA");
