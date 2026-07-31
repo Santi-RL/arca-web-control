@@ -15,7 +15,7 @@ import { openArcaService, openComprobantesEnLinea, selectRepresentedIssuer } fro
 import { waitForPageSettled } from "./pageHelpers.js";
 import { assertCommandAllowedInSessionMode, redactCommandForLog, SessionCommand } from "./sessionCommands.js";
 import { FlowContext } from "./flowContext.js";
-import { InvoiceControlEvidence } from "./controlEvidence.js";
+import { InvoiceControlEvidence, recipientCuitsMatch, recipientIdentityMatches } from "./controlEvidence.js";
 import { executeControlledEmission, sha256File } from "./emission.js";
 import { OperationLedger } from "./operationLedger.js";
 import { fingerprintPage, hashCanonicalJob, PreparedInvoiceState, PreparedInvoiceStore, PreparedInvoiceSummary } from "./preparedInvoice.js";
@@ -1020,6 +1020,16 @@ export function buildPreparedInvoiceSummary(
     [identity.sessionIssuerKey, job.issuerKey, identity.credentialCuit],
   );
   const currency = requireVerifiedCurrency(job, evidence);
+  if (!evidence.recipientCuit || !evidence.recipientName) {
+    throw new Error("No existe evidencia visible completa de la identidad del receptor.");
+  }
+  if (!recipientCuitsMatch(evidence.recipientCuit, job.recipientCuit)
+    || (job.recipientName && !recipientIdentityMatches(
+      { cuit: evidence.recipientCuit, name: evidence.recipientName },
+      { cuit: job.recipientCuit, name: job.recipientName },
+    ))) {
+    throw new Error("La identidad visible del receptor no coincide de forma segura con el job.");
+  }
   if (!evidence.quantity || !evidence.unitPrice || !evidence.subtotal || !evidence.total) {
     throw new Error("No existe evidencia visible completa de cantidad, precio unitario, subtotal y total.");
   }
@@ -1044,7 +1054,7 @@ export function buildPreparedInvoiceSummary(
     billingPeriodFrom: evidence.billingPeriodFrom,
     billingPeriodTo: evidence.billingPeriodTo,
     dueDate: evidence.dueDate,
-    recipientCuit: onlyDigits(job.recipientCuit),
+    recipientCuit: evidence.recipientCuit ?? "",
     recipientName: evidence.recipientName,
     recipientVatCondition: evidence.recipientVatCondition,
     recipientCommercialAddress: evidence.recipientCommercialAddress,
@@ -1076,6 +1086,7 @@ export function validatePreparedSummary(summary: PreparedInvoiceSummary, job: Re
     ["período desde", summary.billingPeriodFrom],
     ["período hasta", summary.billingPeriodTo],
     ["vencimiento", summary.dueDate],
+    ["CUIT del receptor", summary.recipientCuit],
     ["razón social del receptor", summary.recipientName],
     ["condición frente al IVA", summary.recipientVatCondition],
     ["domicilio comercial del receptor", summary.recipientCommercialAddress],
@@ -1097,8 +1108,12 @@ export function validatePreparedSummary(summary: PreparedInvoiceSummary, job: Re
   if (!sameSummaryText(summary.billingPeriodFrom, job.billingPeriodFrom ? formatDateForArca(job.billingPeriodFrom) : undefined)) mismatched.push("período desde");
   if (!sameSummaryText(summary.billingPeriodTo, job.billingPeriodTo ? formatDateForArca(job.billingPeriodTo) : undefined)) mismatched.push("período hasta");
   if (!sameSummaryText(summary.dueDate, job.dueDate ? formatDateForArca(job.dueDate) : undefined)) mismatched.push("vencimiento");
-  if (onlyDigits(summary.recipientCuit) !== onlyDigits(job.recipientCuit)) mismatched.push("CUIT receptor");
-  if (job.recipientName && !sameSummaryText(summary.recipientName, job.recipientName)) mismatched.push("razón social del receptor");
+  const recipientCuitMatches = recipientCuitsMatch(summary.recipientCuit, job.recipientCuit);
+  if (!recipientCuitMatches) mismatched.push("CUIT receptor");
+  if (recipientCuitMatches && job.recipientName && !recipientIdentityMatches(
+    { cuit: summary.recipientCuit, name: summary.recipientName },
+    { cuit: job.recipientCuit, name: job.recipientName },
+  )) mismatched.push("razón social del receptor");
   if (!sameSummaryText(summary.recipientVatCondition, job.recipientVatCondition)) mismatched.push("condición frente al IVA");
   if (job.recipientCommercialAddress && !commercialAddressesMatch(summary.recipientCommercialAddress ?? "", job.recipientCommercialAddress)) mismatched.push("domicilio comercial");
   if (!saleConditionMatches(summary.saleCondition, job.saleCondition)) mismatched.push("condición de venta");
@@ -1125,9 +1140,10 @@ type ExpectedSummarySignal = string | string[];
 export function missingExpectedSummarySignals(
   bodyText: string,
   job: ResolvedInvoiceJob,
-  evidence: Pick<InvoiceControlEvidence, "recipientName" | "recipientCommercialAddress" | "recipientVatCondition" | "description"> = {},
+  evidence: Pick<InvoiceControlEvidence, "recipientCuit" | "recipientName" | "recipientCommercialAddress" | "recipientVatCondition" | "description"> = {},
 ): string[] {
   const missing: string[] = [];
+  const expectedRecipientCuit = evidence.recipientCuit ?? job.recipientCuit;
   const expectedRecipientName = evidence.recipientName ?? job.recipientName;
   const expectedVat = evidence.recipientVatCondition ?? job.recipientVatCondition;
   const expectedDescription = evidence.description ?? job.description;
@@ -1136,9 +1152,12 @@ export function missingExpectedSummarySignals(
   const concept = extractAfter(bodyText, /(?:^|\n)\s*Conceptos? a Inclu[ií]r\s+([^\r\n]+)/im);
   const period = bodyText.match(/(?:^|\n)\s*Per[ií]odo Facturado\s+desde:\s*(\d{2}\/\d{2}\/\d{4})\s+hasta:\s*(\d{2}\/\d{2}\/\d{4})/im);
   const dueDate = extractAfter(bodyText, /(?:^|\n)\s*Vto\.?(?:\s+para el Pago)?\s+([0-9]{2}\/[0-9]{2}\/[0-9]{4})\s*(?:\r?\n|$)/im);
-  const recipientBlock = extractSummarySection(bodyText, /Datos del Receptor/i, /Detalle de la Operaci[oó]n/i);
-  const recipientCuit = extractAfter(recipientBlock, /(?:^|\n)\s*CUIT\s+([0-9-]{11,13})\s*(?:\r?\n|$)/im);
-  const recipientName = extractAfter(recipientBlock, /(?:^|\n)\s*Raz[oó]n Social\s+([^\r\n]+)/im);
+  const recipientHeadingCount = [...bodyText.matchAll(/(?:^|\n)\s*Datos del Receptor\s*(?:\r?\n|$)/gim)].length;
+  const recipientBlock = recipientHeadingCount === 1
+    ? extractSummarySection(bodyText, /Datos del Receptor/i, /Detalle de la Operaci[oó]n/i)
+    : "";
+  const recipientCuit = extractUniqueAfter(recipientBlock, /(?:^|\n)\s*CUIT\s+([^\r\n]+)\s*(?:\r?\n|$)/im);
+  const recipientName = extractUniqueAfter(recipientBlock, /(?:^|\n)\s*Raz[oó]n Social\s+([^\r\n]+)/im);
   const recipientVat = extractAfter(recipientBlock, /(?:^|\n)\s*Condici[oó]n frente al IVA\s+([^\r\n]+)/im);
   const saleCondition = extractAfter(recipientBlock, /(?:^|\n)\s*Condiciones? de Venta\s+([^\r\n]+)/im);
   const detailBlock = extractSummarySection(bodyText, /Detalle de la Operaci[oó]n/i);
@@ -1150,8 +1169,12 @@ export function missingExpectedSummarySignals(
   if (job.billingPeriodFrom && !sameSummaryText(period?.[1], formatDateForArca(job.billingPeriodFrom))) missing.push(`Período desde: ${formatDateForArca(job.billingPeriodFrom)}`);
   if (job.billingPeriodTo && !sameSummaryText(period?.[2], formatDateForArca(job.billingPeriodTo))) missing.push(`Período hasta: ${formatDateForArca(job.billingPeriodTo)}`);
   if (job.dueDate && !sameSummaryText(dueDate, formatDateForArca(job.dueDate))) missing.push(`Vencimiento: ${formatDateForArca(job.dueDate)}`);
-  if (onlyDigits(recipientCuit ?? "") !== onlyDigits(job.recipientCuit)) missing.push(`CUIT receptor: ${onlyDigits(job.recipientCuit)}`);
-  if (expectedRecipientName && !sameSummaryText(recipientName, expectedRecipientName)) missing.push(`Razón social receptor: ${expectedRecipientName}`);
+  const summaryRecipientCuitMatches = recipientCuitsMatch(recipientCuit, expectedRecipientCuit);
+  if (!summaryRecipientCuitMatches) missing.push("CUIT del receptor");
+  if (summaryRecipientCuitMatches && expectedRecipientName && !recipientIdentityMatches(
+    { cuit: recipientCuit, name: recipientName },
+    { cuit: expectedRecipientCuit, name: expectedRecipientName },
+  )) missing.push("Razón social del receptor");
   if (!sameSummaryText(recipientVat, expectedVat)) missing.push(`Condición frente al IVA: ${expectedVat}`);
   if (!saleConditionMatches(saleCondition, job.saleCondition)) missing.push(`Condición de venta: ${formatExpectedSummarySignal(saleConditionSummarySignal(job.saleCondition) ?? job.saleCondition)}`);
   if (!invoiceItemRowMatches(detailBlock, expectedDescription, job.amount)) {
@@ -1244,6 +1267,14 @@ function formatExpectedSummarySignal(signal: ExpectedSummarySignal): string {
 
 function extractAfter(value: string, pattern: RegExp): string | undefined {
   return value.match(pattern)?.[1]?.trim();
+}
+
+function extractUniqueAfter(value: string, pattern: RegExp): string | undefined {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  const matches = [...value.matchAll(new RegExp(pattern.source, flags))]
+    .map((match) => match[1]?.trim())
+    .filter((match): match is string => Boolean(match));
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export function assertEmissionResultMatchesPdf(

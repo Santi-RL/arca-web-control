@@ -119,6 +119,7 @@ test("la ruta rápida espera cada pantalla y el total calculado sin networkidle 
     assert.equal(evidence.currency, "ARS");
     assert.equal(evidence.issuerCuit, "20000000001");
     assert.equal(evidence.issuer, "EMISOR TOTALMENTE FICTICIO");
+    assert.equal(evidence.recipientCuit, "20000000001");
     assert.equal(evidence.recipientName, "ENTIDAD FICTICIA DE PRUEBA");
     assert.equal(observedLoadStates.includes("networkidle"), false);
     assert.equal(observedWaitDurations.every((duration) => duration <= 100), true);

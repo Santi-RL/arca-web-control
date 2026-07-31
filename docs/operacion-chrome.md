@@ -82,6 +82,8 @@ El comando debe llegar a `RESUMEN DE DATOS (PASO 4 DE 4)` y devolver un `prepare
 
 La pantalla de resumen observada no muestra una fila separada para la fecha de emisión. Por eso ese valor se captura y compara contra el control visible `Fecha del Comprobante` en el paso 1 antes de abandonarlo; período y vencimiento se validan además por sus filas etiquetadas en el resumen.
 
+La identidad del receptor se valida primero por un único CUIT visible cuyos once dígitos deben coincidir exactamente con el job. La razón social conserva igual cantidad y orden de términos; solo se normalizan mayúsculas, tildes y puntuación, de modo que `S.A.` equivale a `SA`. Si aparece una forma societaria, debe estar presente en ambos nombres y coincidir exactamente: `SA` nunca equivale a `SRL`, `SAS` o `SAU`. Se tolera como máximo una inserción, eliminación, sustitución o transposición de un carácter en un único término no numérico de al menos seis caracteres. Una omisión, agregado, reordenamiento, segunda errata, forma societaria múltiple, CUIT malformado o campo duplicado detiene la preparación.
+
 La preparación vence a los 60 minutos. Una navegación o mutación posterior puede invalidarla. `status`, `snapshot` y `screenshot` son comandos de lectura y no la invalidan.
 
 ## Emisión pendiente de revalidación

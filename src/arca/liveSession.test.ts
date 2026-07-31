@@ -63,6 +63,7 @@ function completeControlEvidence() {
     billingPeriodFrom: "01/05/2026",
     billingPeriodTo: "31/05/2026",
     dueDate: "05/06/2026",
+    recipientCuit: "20000000001",
     recipientName: "RECEPTOR DE PRUEBA S.A.",
     recipientVatCondition: "IVA Responsable Inscripto",
     recipientCommercialAddress: "Calle Ficticia 100, CABA",
@@ -157,6 +158,26 @@ test("validatePreparedSummary compara las fechas ISO del job con el formato visi
   );
 });
 
+test("el resumen acepta puntuación societaria equivalente y bloquea un tipo societario distinto", () => {
+  const job = invoiceJob();
+  const bodyWithSa = completeSummaryBody().replace("RECEPTOR DE PRUEBA S.A.", "RECEPTOR DE PRUEBA SA");
+  const summaryWithSa = buildPreparedInvoiceSummary(
+    bodyWithSa,
+    job,
+    { ...completeControlEvidence(), recipientName: "RECEPTOR DE PRUEBA SA" },
+    { sessionIssuerKey: "20000000001", credentialCuit: "20000000001" },
+  );
+  assert.doesNotThrow(() => validatePreparedSummary(summaryWithSa, job));
+
+  const bodyWithSrl = completeSummaryBody().replace("RECEPTOR DE PRUEBA S.A.", "RECEPTOR DE PRUEBA SRL");
+  assert.throws(() => buildPreparedInvoiceSummary(
+    bodyWithSrl,
+    job,
+    { ...completeControlEvidence(), recipientName: "RECEPTOR DE PRUEBA SRL" },
+    { sessionIssuerKey: "20000000001", credentialCuit: "20000000001" },
+  ), /identidad visible del receptor no coincide/i);
+});
+
 test("buildPreparedInvoiceSummary no acepta que un CUIT global o receptor sustituya al control Representando a", () => {
   assert.throws(() => buildPreparedInvoiceSummary(
     completeSummaryBody("20000000001"),
@@ -179,6 +200,21 @@ test("buildPreparedInvoiceSummary falla sin evidencia del control o si discrepa 
     { ...completeControlEvidence(), issuer: "OTRO EMISOR TOTALMENTE FICTICIO" },
     { sessionIssuerKey: "20000000001", credentialCuit: "20000000001" },
   ), /razón social.*no coincide/i);
+});
+
+test("buildPreparedInvoiceSummary bloquea un CUIT de receptor ausente o alterado en la evidencia", () => {
+  assert.throws(() => buildPreparedInvoiceSummary(
+    completeSummaryBody(),
+    invoiceJob(),
+    { ...completeControlEvidence(), recipientCuit: undefined },
+    { sessionIssuerKey: "20000000001", credentialCuit: "20000000001" },
+  ), /identidad del receptor/i);
+  assert.throws(() => buildPreparedInvoiceSummary(
+    completeSummaryBody(),
+    invoiceJob(),
+    { ...completeControlEvidence(), recipientCuit: "20000000002" },
+    { sessionIssuerKey: "20000000001", credentialCuit: "20000000001" },
+  ), /identidad visible del receptor no coincide/i);
 });
 
 test("missingExpectedSummarySignals accepts ARCA Otro/Otra wording", () => {
@@ -220,6 +256,20 @@ test("missingExpectedSummarySignals reports missing expected values", () => {
   `;
 
   assert.deepEqual(missingExpectedSummarySignals(bodyText, invoiceJob()), ["3.000.000,00"]);
+});
+
+test("missingExpectedSummarySignals bloquea campos de identidad duplicados", () => {
+  const duplicateRecipientName = completeSummaryBody().replace(
+    "Razón Social RECEPTOR DE PRUEBA S.A.",
+    "Razón Social RECEPTOR DE PRUEBA S.A.\nRazón Social RECEPTOR DE PRUEBA S.A.",
+  );
+  assert.deepEqual(missingExpectedSummarySignals(duplicateRecipientName, invoiceJob()), ["Razón social del receptor"]);
+
+  const duplicateRecipientCuit = completeSummaryBody().replace(
+    "CUIT 20000000001",
+    "CUIT 20000000001\nCUIT 20000000001",
+  );
+  assert.deepEqual(missingExpectedSummarySignals(duplicateRecipientCuit, invoiceJob()), ["CUIT del receptor"]);
 });
 
 test("missingExpectedSummarySignals exige el domicilio comercial con equivalencia documentada de CABA", () => {

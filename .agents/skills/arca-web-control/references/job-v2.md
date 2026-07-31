@@ -58,6 +58,7 @@ Reglas:
 - Mantener `amount` como decimal con dos dígitos. Si llega como número JSON, debe tener como máximo dos decimales y se rechaza en lugar de redondearse.
 - Declarar obligatoriamente `currency: "ARS"`. La omisión y cualquier otra moneda se rechazan antes de navegar.
 - Usar CUIT válidos de once dígitos y el CUIT canónico del emisor como `issuerKey`.
+- Al validar el receptor contra ARCA, exigir un único CUIT visible y que sus once dígitos coincidan exactamente con `recipientCuit`; no extraer dígitos de texto arbitrario. Comparar la razón social conservando igual cantidad y orden de términos, normalizando mayúsculas, tildes y puntuación (`S.A.` equivale a `SA`). Si aparece una forma societaria, debe estar presente en ambos nombres y coincidir exactamente. Solo se admite una inserción, eliminación, sustitución o transposición de un carácter en un único término no numérico de al menos seis caracteres; bloquear omisiones, agregados, reordenamientos, formas societarias múltiples y cualquier otra diferencia.
 - Si falta el vencimiento, Servicios aplica cinco días corridos desde `date`, la fecha del comprobante.
 - Dejar actividad, referencia comercial y unidad de medida vacías salvo indicación expresa.
 - Omitir `outputDir` para usar la base privada predeterminada. Por compatibilidad puede indicar `"."` o una subcarpeta relativa de `downloads`, pero solo cambia la base: la estructura final por emisor, año y mes siempre se genera automáticamente. Se rechazan rutas absolutas, UNC y segmentos `..`.

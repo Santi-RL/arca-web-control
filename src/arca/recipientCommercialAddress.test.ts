@@ -40,6 +40,7 @@ async function openFixture(browser: Browser, addressControls: string): Promise<P
   await page.route(recipientUrl, (route) => route.fulfill({
     contentType: "text/html",
     body: `
+      <label>CUIT <input id="nrodocreceptor" value="20000000001"></label>
       <label>Razón Social <input id="razonsocialreceptor" value="RECEPTOR TOTALMENTE FICTICIO"></label>
       <label>Condición frente al IVA
         <select id="idivareceptor"><option selected>Consumidor Final</option></select>
@@ -60,6 +61,55 @@ test("la equivalencia de domicilio solo contempla las denominaciones documentada
     "caba-equivalent",
   );
   assert.equal(classifyCommercialAddressMatch("Calle Ficticia 100", "Calle Ficticia 1000"), "none");
+});
+
+test("bloquea antes de validar el nombre si el CUIT visible del receptor difiere", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await openFixture(browser, `
+      <label>Domicilio Comercial
+        <select id="domicilioreceptor" name="domicilioReceptor">
+          <option value="known" selected>Avenida Ficticia 100</option>
+        </select>
+      </label>
+    `);
+    await page.locator("#nrodocreceptor").fill("20000000002");
+    await assert.rejects(
+      () => captureRecipientEvidence(page, invoiceJob("Avenida Ficticia 100")),
+      /CUIT visible del receptor no coincide/i,
+    );
+    await page.locator("#nrodocreceptor").fill("20x00000000x1");
+    await assert.rejects(
+      () => captureRecipientEvidence(page, invoiceJob("Avenida Ficticia 100")),
+      /CUIT visible del receptor no coincide/i,
+    );
+    await page.close();
+  } finally {
+    await browser.close();
+  }
+});
+
+test("el error de razón social no expone el valor fiscal devuelto por ARCA", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await openFixture(browser, `
+      <label>Domicilio Comercial
+        <select id="domicilioreceptor" name="domicilioReceptor">
+          <option value="known" selected>Avenida Ficticia 100</option>
+        </select>
+      </label>
+    `);
+    const visibleName = "RECEPTOR TOTALMENTE FICTICIO SRL";
+    await page.locator("#razonsocialreceptor").fill(visibleName);
+    const error = await captureRecipientEvidence(page, invoiceJob("Avenida Ficticia 100"))
+      .then(() => undefined, (cause: unknown) => cause);
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /razón social devuelta por ARCA no coincide/i);
+    assert.equal(error.message.includes(visibleName), false);
+    await page.close();
+  } finally {
+    await browser.close();
+  }
 });
 
 test("selecciona el domicilio completo y no una coincidencia parcial", async () => {

@@ -13,6 +13,7 @@ export type InvoiceControlEvidence = {
   billingPeriodFrom?: string;
   billingPeriodTo?: string;
   dueDate?: string;
+  recipientCuit?: string;
   recipientName?: string;
   recipientCommercialAddress?: string;
   recipientVatCondition?: string;
@@ -55,10 +56,18 @@ export async function captureCurrencyEvidence(page: Page, job: ResolvedInvoiceJo
 
 export async function captureRecipientEvidence(page: Page, job: ResolvedInvoiceJob): Promise<InvoiceControlEvidence> {
   assertOfficialArcaRcelUrl(page.url(), "la captura de datos del receptor");
+  const recipientCuitControl = await uniqueVisible(page.locator("#nrodocreceptor"), "CUIT del receptor");
+  const recipientCuit = (await recipientCuitControl.inputValue()).trim();
+  if (!/^[0-9]{11}$/u.test(recipientCuit) || !recipientCuitsMatch(recipientCuit, job.recipientCuit)) {
+    throw new Error("El CUIT visible del receptor no coincide con el job.");
+  }
   const recipientName = await optionalInput(page.locator("#razonsocialreceptor"));
   if (!recipientName) throw new Error("ARCA no completó la razón social del receptor.");
-  if (job.recipientName && !sameText(recipientName, job.recipientName)) {
-    throw new Error(`La razón social devuelta por ARCA no coincide con el job: ${recipientName}.`);
+  if (job.recipientName && !recipientIdentityMatches(
+    { cuit: recipientCuit, name: recipientName },
+    { cuit: job.recipientCuit, name: job.recipientName },
+  )) {
+    throw new Error("La razón social devuelta por ARCA no coincide de forma segura con el job.");
   }
   const address = (await readRecipientCommercialAddress(page)).value;
   if (job.recipientCommercialAddress && !commercialAddressesMatch(address, job.recipientCommercialAddress)) {
@@ -69,7 +78,115 @@ export async function captureRecipientEvidence(page: Page, job: ResolvedInvoiceJ
   if (!sameText(vat, job.recipientVatCondition)) {
     throw new Error(`La condición IVA visible no coincide: ${vat}.`);
   }
-  return compact({ recipientName, recipientCommercialAddress: address, recipientVatCondition: vat });
+  return compact({ recipientCuit, recipientName, recipientCommercialAddress: address, recipientVatCondition: vat });
+}
+
+const LEGAL_ENTITY_FORMS = new Set(["SA", "SAU", "SAS", "SRL", "SC", "SCA", "SCS", "SH", "UTE"]);
+
+type RecipientIdentity = {
+  cuit: string | undefined;
+  name: string | undefined;
+};
+
+export function recipientCuitsMatch(actual: string | undefined, expected: string | undefined): boolean {
+  const actualCuit = canonicalRecipientCuit(actual);
+  const expectedCuit = canonicalRecipientCuit(expected);
+  return Boolean(actualCuit && expectedCuit && actualCuit === expectedCuit);
+}
+
+/** La tolerancia nominal solo se habilita dentro de una identidad con CUIT exacto. */
+export function recipientIdentityMatches(actual: RecipientIdentity, expected: RecipientIdentity): boolean {
+  return recipientCuitsMatch(actual.cuit, expected.cuit) && recipientNamesMatch(actual.name, expected.name);
+}
+
+function recipientNamesMatch(actual: string | undefined, expected: string | undefined): boolean {
+  if (!actual || !expected) return false;
+  const left = parseRecipientName(actual);
+  const right = parseRecipientName(expected);
+  if (!left.valid || !right.valid || left.legalForm !== right.legalForm || left.tokens.length !== right.tokens.length) return false;
+
+  let typoUsed = false;
+  for (let index = 0; index < left.tokens.length; index += 1) {
+    const leftToken = left.tokens[index] as string;
+    const rightToken = right.tokens[index] as string;
+    if (leftToken === rightToken) continue;
+    if (typoUsed
+      || Math.min(leftToken.length, rightToken.length) < 6
+      || /^[0-9]+$/u.test(leftToken)
+      || /^[0-9]+$/u.test(rightToken)
+      || !isSingleCharacterTypo(leftToken, rightToken)) {
+      return false;
+    }
+    typoUsed = true;
+  }
+  return left.tokens.length > 0;
+}
+
+function parseRecipientName(value: string): { tokens: string[]; legalForm?: string; valid: boolean } {
+  const tokens = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, " ")
+    .split(/\s+/u)
+    .filter(Boolean);
+
+  const parsed = splitLegalEntityForm(tokens);
+  if (!parsed.legalForm) return { ...parsed, valid: parsed.tokens.length > 0 };
+  const nestedLegalForm = splitLegalEntityForm(parsed.tokens).legalForm;
+  return { ...parsed, valid: parsed.tokens.length > 0 && !nestedLegalForm };
+}
+
+function splitLegalEntityForm(tokens: string[]): { tokens: string[]; legalForm?: string } {
+  for (let length = Math.min(3, tokens.length); length >= 1; length -= 1) {
+    const candidate = tokens.slice(-length).join("");
+    if (LEGAL_ENTITY_FORMS.has(candidate)) return { tokens: tokens.slice(0, -length), legalForm: candidate };
+  }
+  return { tokens };
+}
+
+function canonicalRecipientCuit(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (/^[0-9]{11}$/u.test(trimmed)) return trimmed;
+  if (/^[0-9]{2}-[0-9]{8}-[0-9]$/u.test(trimmed)) return trimmed.replace(/-/g, "");
+  return undefined;
+}
+
+function isSingleCharacterTypo(left: string, right: string): boolean {
+  const lengthDifference = left.length - right.length;
+  if (Math.abs(lengthDifference) > 1) return false;
+  if (lengthDifference === 0) {
+    const differences: number[] = [];
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] !== right[index]) differences.push(index);
+      if (differences.length > 2) return false;
+    }
+    if (differences.length === 1) return true;
+    if (differences.length !== 2) return false;
+    const first = differences[0] as number;
+    const second = differences[1] as number;
+    return second === first + 1
+      && left[first] === right[second]
+      && left[second] === right[first];
+  }
+
+  const longer = lengthDifference > 0 ? left : right;
+  const shorter = lengthDifference > 0 ? right : left;
+  let longerIndex = 0;
+  let shorterIndex = 0;
+  let skipped = false;
+  while (longerIndex < longer.length && shorterIndex < shorter.length) {
+    if (longer[longerIndex] === shorter[shorterIndex]) {
+      longerIndex += 1;
+      shorterIndex += 1;
+      continue;
+    }
+    if (skipped) return false;
+    skipped = true;
+    longerIndex += 1;
+  }
+  return true;
 }
 
 export async function captureDetailEvidence(page: Page, job: ResolvedInvoiceJob): Promise<InvoiceControlEvidence> {

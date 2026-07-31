@@ -1,6 +1,6 @@
 {
   "id": "invoice-services-single-item",
-  "version": 11,
+  "version": 12,
   "title": "Factura C de servicios de un ítem",
   "maturity": "automated_to_summary",
   "hiddenAllowed": false,
@@ -16,7 +16,7 @@
     "currency": "ARS",
     "itemCount": 1
   },
-  "testEvidence": ["src/capabilities/registry.test.ts", "src/arca/preparedInvoice.test.ts", "src/arca/liveSession.test.ts", "src/arca/chatPreparation.test.ts", "src/arca/visibleRevalidationGuard.test.ts", "src/arca/sessionPrivatePaths.test.ts", "src/arca/invoiceFlow.integration.test.ts", "src/arca/invoiceTotal.test.ts", "src/arca/invoicePdf.test.ts", "src/arca/invoiceArchive.test.ts", "src/arca/navigation.test.ts", "src/arca/operationLedger.test.ts", "src/arca/emission.test.ts", "src/arca/sessionLauncher.test.ts", "src/arca/sessionCommandGate.test.ts", "src/arca/authenticationAttemptGate.test.ts", "src/arca/captcha.test.ts", "src/arca/login.test.ts", "src/arca/performance.test.ts", "src/config/env.test.ts", "src/config/credentials.test.ts", "src/config/credentialProvider.test.ts", "src/config/runtimePaths.test.ts", "src/config/runtimeMaintenance.test.ts", "src/config/privateDownloads.test.ts", "src/config/privateJobs.test.ts", "src/config/privateRecoveryPdf.test.ts", "src/io/privateChildProcess.test.ts", "src/io/loopbackRequest.test.ts", "src/io/osMutex.test.ts", "src/io/atomicJson.test.ts", "src/jobs/schema.test.ts", "src/jobs/privateIntake.test.ts", "src/jobs/chatIntake.test.ts", "src/jobs/migrateScript.test.ts", "src/mcp/contracts.test.ts", "src/learning/authentication.test.ts", "src/learning/recorder.integration.test.ts"],
+  "testEvidence": ["src/capabilities/registry.test.ts", "src/arca/preparedInvoice.test.ts", "src/arca/liveSession.test.ts", "src/arca/chatPreparation.test.ts", "src/arca/visibleRevalidationGuard.test.ts", "src/arca/sessionPrivatePaths.test.ts", "src/arca/invoiceFlow.integration.test.ts", "src/arca/recipientIdentity.test.ts", "src/arca/recipientCommercialAddress.test.ts", "src/arca/invoiceTotal.test.ts", "src/arca/invoicePdf.test.ts", "src/arca/invoiceArchive.test.ts", "src/arca/navigation.test.ts", "src/arca/operationLedger.test.ts", "src/arca/emission.test.ts", "src/arca/sessionLauncher.test.ts", "src/arca/sessionCommandGate.test.ts", "src/arca/authenticationAttemptGate.test.ts", "src/arca/captcha.test.ts", "src/arca/login.test.ts", "src/arca/performance.test.ts", "src/config/env.test.ts", "src/config/credentials.test.ts", "src/config/credentialProvider.test.ts", "src/config/runtimePaths.test.ts", "src/config/runtimeMaintenance.test.ts", "src/config/privateDownloads.test.ts", "src/config/privateJobs.test.ts", "src/config/privateRecoveryPdf.test.ts", "src/io/privateChildProcess.test.ts", "src/io/loopbackRequest.test.ts", "src/io/osMutex.test.ts", "src/io/atomicJson.test.ts", "src/jobs/schema.test.ts", "src/jobs/privateIntake.test.ts", "src/jobs/chatIntake.test.ts", "src/jobs/migrateScript.test.ts", "src/mcp/contracts.test.ts", "src/learning/authentication.test.ts", "src/learning/recorder.integration.test.ts"],
   "realEvidence": ["docs/estado-y-roadmap.md#validación-visible-del-2026-07-29-hasta-el-resumen"],
   "lastValidatedAt": null,
   "lastValidatedVisible": false
