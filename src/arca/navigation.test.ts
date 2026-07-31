@@ -66,13 +66,18 @@ test("prioriza el CUIT exacto sobre una etiqueta de nombre que podría correspon
       <h1 id="selector-heading">Seleccione la empresa a representar</h1>
       <button id="wrong">EMISOR DUPLICADO</button>
       <button id="target">20-00000000-1 - EMISOR CANÓNICO</button>
+      <button id="continue">Continuar</button>
       <script>
-        for (const button of document.querySelectorAll('button')) {
-          button.addEventListener('click', () => {
-            document.body.dataset.clicked = button.id;
-            document.querySelector('#selector-heading')?.remove();
-          });
-        }
+        document.querySelector('#wrong').addEventListener('click', () => {
+          document.body.dataset.issuerClicked = 'wrong';
+        });
+        document.querySelector('#target').addEventListener('click', () => {
+          document.body.dataset.issuerClicked = 'target';
+        });
+        document.querySelector('#continue').addEventListener('click', () => {
+          document.body.dataset.continued = 'yes';
+          document.querySelector('#selector-heading')?.remove();
+        });
       </script>
     `;
     await page.context().route("https://fe.afip.gob.ar/rcel/jsp/index_bis.jsp", (route) => route.fulfill({ contentType: "text/html", body }));
@@ -80,7 +85,8 @@ test("prioriza el CUIT exacto sobre una etiqueta de nombre que podría correspon
 
     await selectRepresentedIssuer(page, "20000000001", "EMISOR DUPLICADO", strictContext);
 
-    assert.equal(await page.evaluate(() => document.body.dataset.clicked), "target");
+    assert.equal(await page.evaluate(() => document.body.dataset.issuerClicked), "target");
+    assert.equal(await page.evaluate(() => document.body.dataset.continued), "yes");
   } finally {
     await browser.close();
   }

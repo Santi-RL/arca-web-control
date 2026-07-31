@@ -44,8 +44,10 @@ La entrada acepta fechas `DD/MM/AAAA` o `AAAA-MM-DD`, importe ficticio `123.456,
 Para la corrida irreversible de revalidación pendiente, usar la misma operación con:
 
 ```powershell
-npm run arca:invoice:prepare-chat -- --revalidate-irreversible invoice-services-single-item
+npm run arca:invoice:prepare-chat "--" --revalidate-irreversible invoice-services-single-item
 ```
+
+Al canalizar el JSON por `stdin` en PowerShell, las comillas del separador `"--"` son obligatorias para que `npm.ps1` reenvíe el flag de revalidación al script.
 
 Las primitivas siguientes se conservan para diagnóstico y recuperación.
 
@@ -84,7 +86,7 @@ La preparación vence a los 60 minutos. Una navegación o mutación posterior pu
 
 El manifiesto vigente no incluye `emit-prepared-invoice`; por lo tanto, la versión pública actual debe detenerse en el resumen y no ejecutar la acción irreversible. La implementación se conserva para una próxima validación visible completa de generación, descarga, PDF y ledger.
 
-La única excepción es una corrida de revalidación irreversible explícita y supervisada. La ruta conversacional recomendada es `arca:invoice:prepare-chat -- --revalidate-irreversible invoice-services-single-item`; para diagnóstico de bajo nivel puede iniciarse desde cero en Chrome visible con:
+La única excepción es una corrida de revalidación irreversible explícita y supervisada. La ruta conversacional recomendada es `arca:invoice:prepare-chat "--" --revalidate-irreversible invoice-services-single-item`; para diagnóstico de bajo nivel puede iniciarse desde cero en Chrome visible con:
 
 ```powershell
 npm run arca:session:start -- --issuer <CUIT_EMISOR> --revalidate-irreversible invoice-services-single-item

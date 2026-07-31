@@ -299,14 +299,15 @@ export async function selectRepresentedIssuer(page: Page, issuerCuit: string, is
     assertOfficialArcaRcelUrl(page.url(), "la validación posterior del representado");
 
     if (await page.getByText(/seleccione la empresa|empresa a representar/i).first().isVisible().catch(() => false)) {
-      throw new Error("La seleccion del emisor no avanzo: sigue visible la pantalla de empresa a representar.");
-    }
-    const continueButton = page.getByRole("button", { name: /continuar|aceptar|seleccionar/i });
-    if (await continueButton.first().isVisible().catch(() => false)) {
       assertOfficialArcaRcelUrl(page.url(), "la confirmación del representado");
-      await continueButton.first().click();
+      await clickFirstVisible([
+        candidate(page.getByRole("button", { name: /continuar|aceptar|seleccionar/i }), "botón para confirmar el representado"),
+      ], "confirmación del representado", context);
       await waitForArcaDocumentReady(page);
       assertOfficialArcaRcelUrl(page.url(), "la pantalla posterior al representado");
+    }
+    if (await page.getByText(/seleccione la empresa|empresa a representar/i).first().isVisible().catch(() => false)) {
+      throw new Error("La seleccion del emisor no avanzo: sigue visible la pantalla de empresa a representar.");
     }
   }
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import type { CurrentSessionState } from "./sessionState.js";
 import { parseChatPreparationArgs, sanitizePreparationOutput, sessionMetadataMatches, sessionStatusIsReusable } from "./chatPreparation.js";
@@ -17,6 +18,26 @@ test("la ruta conversacional parsea solo flags cerrados", () => {
   });
   assert.throws(() => parseChatPreparationArgs(["--timeout-ms"]), /exige un valor/);
   assert.throws(() => parseChatPreparationArgs(["--otro"]), /no reconocido/);
+});
+
+test("PowerShell reenvía el flag de revalidación cuando el separador de npm está citado", { skip: process.platform !== "win32" }, () => {
+  const result = spawnSync("pwsh.exe", [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "'{' | npm run arca:invoice:prepare-chat \"--\" --revalidate-irreversible invoice-services-single-item",
+  ], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 15_000,
+    windowsHide: true,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 1);
+  const output = `${result.stdout}\n${result.stderr}`;
+  assert.match(output, /La entrada privada no contiene un JSON válido\./);
+  assert.doesNotMatch(output, /Argumento no reconocido|Unknown cli config/);
 });
 
 test("solo reutiliza una sesión visible, entregada y de la misma identidad y carril", () => {
