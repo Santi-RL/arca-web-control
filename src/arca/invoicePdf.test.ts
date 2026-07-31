@@ -125,6 +125,49 @@ test("valida el PDF fiscal y extrae número de comprobante y CAE", async () => {
     assert.equal(evidence.cae, "99999999999999");
     assert.equal(evidence.pageCount, 1);
 
+    const visualOrderPath = path.join(directory, "factura-orden-visual.pdf");
+    await page.setContent(`
+      <p>C / COD. 011</p><h1>FACTURA</h1>
+      <p>Punto de Venta: 00001 Comp. Nro: 00000042</p>
+      <p>Fecha de Emisión: 15/06/2030</p><p>CUIT: 20-00000000-1</p>
+      <p>Servicio de prueba 1,00 unidades 123456,78 0,00 0,00 123456,78</p>
+      <p>Subtotal: $ 123456,78</p>
+      <div style="position: relative; height: 20px">
+        <span style="position: absolute; left: 180px">123456,78</span>
+        <span style="position: absolute; left: 0">Importe Total: $</span>
+      </div>
+      <p>Comprobante Autorizado</p><p>CAE N°: 99999999999999</p>
+    `);
+    await page.pdf({ path: visualOrderPath, format: "A4" });
+    const flattenedVisualOrderText = await extractFirstPageText(visualOrderPath);
+    assert.equal(/Importe\s+Total\s*:?\s*\$?\s*123456,78/iu.test(flattenedVisualOrderText), false);
+    assert.ok(flattenedVisualOrderText.lastIndexOf("123456,78") < flattenedVisualOrderText.indexOf("Importe Total"));
+    const visualOrderEvidence = await inspectArcaInvoicePdf(visualOrderPath, {
+      voucherType: "Factura C", pointOfSale: "00001", issueDate: "15/06/2030",
+      recipientCuit: "20000000001", description: "Servicio de prueba", amountCents: 12_345_678,
+    });
+    assert.equal(visualOrderEvidence.voucherNumber, "00001-00000042");
+    assert.equal(visualOrderEvidence.cae, "99999999999999");
+
+    const wrongVisualOrderPath = path.join(directory, "factura-orden-visual-total-incorrecto.pdf");
+    await page.setContent(`
+      <p>C / COD. 011</p><h1>FACTURA</h1>
+      <p>Punto de Venta: 00001 Comp. Nro: 00000042</p>
+      <p>Fecha de Emisión: 15/06/2030</p><p>CUIT: 20-00000000-1</p>
+      <p>Servicio de prueba 1,00 unidades 123456,78 0,00 0,00 123456,78</p>
+      <p>Subtotal: $ 123456,78</p>
+      <div style="position: relative; height: 20px">
+        <span style="position: absolute; left: 180px">246913,56</span>
+        <span style="position: absolute; left: 0">Importe Total: $</span>
+      </div>
+      <p>Comprobante Autorizado</p><p>CAE N°: 99999999999999</p>
+    `);
+    await page.pdf({ path: wrongVisualOrderPath, format: "A4" });
+    await assert.rejects(() => inspectArcaInvoicePdf(wrongVisualOrderPath, {
+      voucherType: "Factura C", pointOfSale: "00001", issueDate: "15/06/2030",
+      recipientCuit: "20000000001", description: "Servicio de prueba", amountCents: 12_345_678,
+    }), /Importe Total esperado/);
+
     await assert.rejects(
       () => inspectArcaInvoicePdf(pdfPath, {
         voucherType: "Factura C",
@@ -152,6 +195,70 @@ test("valida el PDF fiscal y extrae número de comprobante y CAE", async () => {
       recipientCuit: "20000000001", description: "Servicio de prueba", amountCents: 12_345_678,
     }), /Importe Total esperado/);
 
+    const duplicateTotalPath = path.join(directory, "factura-total-duplicado.pdf");
+    await page.setContent(`
+      <h1>FACTURA C</h1><p>Punto de Venta: Comp. Nro: 00001 00000042</p>
+      <p>Fecha de Emisión: 15/06/2030</p><p>CUIT: 20000000001</p>
+      <p>Servicio de prueba 1,00 unidades 123456,78 0,00 0,00 123456,78</p>
+      <p>Importe Total: $ 123456,78</p><p>Importe Total: $ 123456,78</p>
+      <p>Comprobante Autorizado</p><p>CAE N°: 99999999999999</p>
+    `);
+    await page.pdf({ path: duplicateTotalPath, format: "A4" });
+    await assert.rejects(() => inspectArcaInvoicePdf(duplicateTotalPath, {
+      voucherType: "Factura C", pointOfSale: "00001", issueDate: "15/06/2030",
+      recipientCuit: "20000000001", description: "Servicio de prueba", amountCents: 12_345_678,
+    }), /Importe Total esperado/);
+
+    const ambiguousTotalPath = path.join(directory, "factura-total-ambiguo.pdf");
+    await page.setContent(`
+      <h1>FACTURA C</h1><p>Punto de Venta: Comp. Nro: 00001 00000042</p>
+      <p>Fecha de Emisión: 15/06/2030</p><p>CUIT: 20000000001</p>
+      <p>Servicio de prueba 1,00 unidades 123456,78 0,00 0,00 123456,78</p>
+      <div style="position: relative; height: 20px">
+        <span style="position: absolute; left: 0">Importe Total: $</span>
+        <span style="position: absolute; left: 180px">123456,78</span>
+        <span style="position: absolute; left: 280px">123456,78</span>
+      </div>
+      <p>Comprobante Autorizado</p><p>CAE N°: 99999999999999</p>
+    `);
+    await page.pdf({ path: ambiguousTotalPath, format: "A4" });
+    await assert.rejects(() => inspectArcaInvoicePdf(ambiguousTotalPath, {
+      voucherType: "Factura C", pointOfSale: "00001", issueDate: "15/06/2030",
+      recipientCuit: "20000000001", description: "Servicio de prueba", amountCents: 12_345_678,
+    }), /Importe Total esperado/);
+
+    const surroundingAmountsPath = path.join(directory, "factura-total-importe-a-cada-lado.pdf");
+    await page.setContent(`
+      <h1>FACTURA C</h1><p>Punto de Venta: Comp. Nro: 00001 00000042</p>
+      <p>Fecha de Emisión: 15/06/2030</p><p>CUIT: 20000000001</p>
+      <p>Servicio de prueba 1,00 unidades 123456,78 0,00 0,00 123456,78</p>
+      <div style="position: relative; height: 20px">
+        <span style="position: absolute; left: 0">1,00</span>
+        <span style="position: absolute; left: 90px">Importe Total: $</span>
+        <span style="position: absolute; left: 270px">123456,78</span>
+      </div>
+      <p>Comprobante Autorizado</p><p>CAE N°: 99999999999999</p>
+    `);
+    await page.pdf({ path: surroundingAmountsPath, format: "A4" });
+    await assert.rejects(() => inspectArcaInvoicePdf(surroundingAmountsPath, {
+      voucherType: "Factura C", pointOfSale: "00001", issueDate: "15/06/2030",
+      recipientCuit: "20000000001", description: "Servicio de prueba", amountCents: 12_345_678,
+    }), /Importe Total esperado/);
+
+    const malformedTotalPath = path.join(directory, "factura-total-separadores-incoherentes.pdf");
+    await page.setContent(`
+      <h1>FACTURA C</h1><p>Punto de Venta: Comp. Nro: 00001 00000042</p>
+      <p>Fecha de Emisión: 15/06/2030</p><p>CUIT: 20000000001</p>
+      <p>Servicio de prueba 1,00 unidades 3000000,00 0,00 0,00 3000000,00</p>
+      <p>Importe Total: $ 3.000.000.00</p>
+      <p>Comprobante Autorizado</p><p>CAE N°: 99999999999999</p>
+    `);
+    await page.pdf({ path: malformedTotalPath, format: "A4" });
+    await assert.rejects(() => inspectArcaInvoicePdf(malformedTotalPath, {
+      voucherType: "Factura C", pointOfSale: "00001", issueDate: "15/06/2030",
+      recipientCuit: "20000000001", description: "Servicio de prueba", amountCents: 300_000_000,
+    }), /Importe Total esperado/);
+
     const wrongQuantityPath = path.join(directory, "factura-cantidad-incorrecta.pdf");
     await page.setContent(`
       <h1>FACTURA C</h1>
@@ -171,3 +278,20 @@ test("valida el PDF fiscal y extrae número de comprobante y CAE", async () => {
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+async function extractFirstPageText(pdfPath: string): Promise<string> {
+  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const task = getDocument({
+    data: new Uint8Array(await fs.readFile(pdfPath)),
+    useWorkerFetch: false,
+    verbosity: 0,
+  });
+  try {
+    const document = await task.promise;
+    const page = await document.getPage(1);
+    const content = await page.getTextContent();
+    return content.items.map((item) => "str" in item ? item.str : "").join(" ").replace(/\s+/g, " ").trim();
+  } finally {
+    await task.destroy();
+  }
+}

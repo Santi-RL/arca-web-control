@@ -111,7 +111,7 @@ export async function inspectArcaInvoicePdf(
     const page = await document.getPage(1);
     const content = await page.getTextContent();
     const text = content.items.map((item) => "str" in item ? item.str : "").join(" ").replace(/\s+/g, " ").trim();
-    assertExpectedInvoiceText(text, expected);
+    assertExpectedInvoiceText(text, expected, buildVisualTextLines(content.items));
 
     const voucherReference = extractVoucherReference(text);
     const caeCandidates = [...new Set(text.match(/\b\d{14}\b/g) ?? [])];
@@ -145,7 +145,7 @@ function assertPdfBytes(bytes: Uint8Array): void {
   }
 }
 
-function assertExpectedInvoiceText(text: string, expected: ArcaInvoicePdfExpectation): void {
+function assertExpectedInvoiceText(text: string, expected: ArcaInvoicePdfExpectation, visualLines: readonly string[]): void {
   const normalizedText = normalizeText(text);
   const expectedSignals = [
     [normalizeText(expected.issueDate), "fecha de emisión"],
@@ -165,9 +165,13 @@ function assertExpectedInvoiceText(text: string, expected: ArcaInvoicePdfExpecta
   if (voucherReference.pointOfSale !== expected.pointOfSale.padStart(5, "0")) {
     throw new Error("El PDF de ARCA no coincide con el punto de venta esperado.");
   }
-  const labelledTotals = [...text.matchAll(/Importe\s+Total\s*:?\s*(?:\$|ARS)?\s*(\d[\d.\s]*[,.]\d{2})/giu)]
-    .map((match) => parsePdfMoney(match[1] ?? ""));
-  if (labelledTotals.length !== 1 || labelledTotals[0] !== expected.amountCents) {
+  const visualTotalLines = visualLines.filter((line) => /Importe\s+Total/iu.test(line));
+  const totalLabelOccurrences = visualTotalLines
+    .reduce((count, line) => count + (line.match(/Importe\s+Total/giu)?.length ?? 0), 0);
+  const visualTotal = visualTotalLines[0] ? extractVisualTotal(visualTotalLines[0]) : undefined;
+  if (visualTotalLines.length !== 1
+    || totalLabelOccurrences !== 1
+    || visualTotal !== expected.amountCents) {
     throw new Error("El PDF de ARCA no coincide con el Importe Total esperado.");
   }
 
@@ -186,6 +190,57 @@ function assertExpectedInvoiceText(text: string, expected: ArcaInvoicePdfExpecta
   if (expectedMoneyCount < 2) {
     throw new Error("El PDF de ARCA no confirma precio unitario y subtotal del único ítem esperado.");
   }
+}
+
+function extractVisualTotal(line: string): number | undefined {
+  const label = /\bImporte\s+Total\b\s*:?/iu.exec(line);
+  if (!label?.[0] || label.index === undefined || line.slice(0, label.index).trim().length > 0) return undefined;
+  const afterLabel = line.slice(label.index + label[0].length);
+  const amount = PDF_TOTAL_VALUE_PATTERN.exec(afterLabel)?.[1];
+  return amount ? parsePdfMoney(amount) : undefined;
+}
+
+const PDF_TOTAL_VALUE_PATTERN = /^\s*(?:\$|ARS)?\s*((?:\d{1,3}(?:\.\d{3})+,\s*\d{2}|\d{1,3}(?:,\d{3})+\.\s*\d{2}|\d{1,3}(?:[ \u00a0]\d{3})+[,.]\s*\d{2}|\d+[,.]\s*\d{2}))\s*$/iu;
+
+function buildVisualTextLines(items: readonly unknown[]): string[] {
+  const positioned = items
+    .filter(isPositionedTextItem)
+    .map((item, index) => ({
+      str: item.str.trim(),
+      x: item.transform[4] as number,
+      y: item.transform[5] as number,
+      height: item.height,
+      index,
+    }))
+    .filter((item) => item.str.length > 0);
+  const lines: Array<{ y: number; height: number; items: Array<{ str: string; x: number; index: number }> }> = [];
+  for (const item of positioned) {
+    const line = lines.find((candidate) => {
+      const tolerance = Math.max(0.5, Math.min(2, Math.min(candidate.height, item.height) * 0.25));
+      return Math.abs(candidate.y - item.y) <= tolerance;
+    });
+    if (line) line.items.push({ str: item.str, x: item.x, index: item.index });
+    else lines.push({ y: item.y, height: item.height, items: [{ str: item.str, x: item.x, index: item.index }] });
+  }
+  return lines.map((line) => line.items
+    .sort((left, right) => left.x - right.x || left.index - right.index)
+    .map((item) => item.str)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim());
+}
+
+function isPositionedTextItem(value: unknown): value is { str: string; transform: number[]; height: number } {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as { str?: unknown; transform?: unknown; height?: unknown };
+  return typeof candidate.str === "string"
+    && Array.isArray(candidate.transform)
+    && candidate.transform.length >= 6
+    && Number.isFinite(candidate.transform[4])
+    && Number.isFinite(candidate.transform[5])
+    && typeof candidate.height === "number"
+    && Number.isFinite(candidate.height)
+    && candidate.height > 0;
 }
 
 function extractVoucherReference(text: string): { pointOfSale: string; number: string } {

@@ -58,6 +58,12 @@ El código vigente escucha la descarga antes del único clic, la recibe en stagi
 
 Para resolver la circularidad sin falsear la madurez, existe un carril de revalidación visible explícito. Solo puede habilitarse al iniciar una sesión exclusiva para la capacidad pendiente, exige un `preparedInvoiceId` vigente y la confirmación exacta `EMITIR`, reutiliza el mismo flujo irreversible y mantiene `unknown` como resultado terminal ante incertidumbre. Antes del primer clic reserva una atestación privada ligada a la versión del manifiesto. Una falla comprobada antes de intentar el clic permite liberar esa reserva y volver a `failed_before_emit`, siempre cerrando la sesión consumida; desde el primer intento de clic, ningún job o sesión nuevos pueden consumir una segunda acción irreversible de esa versión. Este carril no habilita la emisión productiva ni modifica el manifiesto automáticamente.
 
+## Variante real del PDF detectada el 2026-07-31
+
+Una revalidación visible produjo un único comprobante y descargó su PDF oficial, pero la validación automática dejó correctamente la operación en `unknown`: el total era visualmente correcto, aunque PDF.js entregaba el importe antes que la etiqueta `Importe Total` en el orden lógico de sus `TextItem`. No se repitió la acción irreversible y los artefactos crudos permanecieron en el almacenamiento privado.
+
+La validación reconstruye ahora cada línea por las coordenadas del texto, exige una única etiqueta y un único importe monetario posterior en esa línea visual, y rechaza cualquier geometría ambigua. Las pruebas locales cubren el orden lógico invertido, un total incorrecto en esa variante, etiquetas duplicadas y dos importes en una misma línea. La reconciliación canónica de esta operación y una revalidación visible integral de la versión corregida continúan pendientes; por eso no se promueven la madurez, la emisión productiva ni el modo oculto.
+
 ## Evaluaciones aisladas de la skill
 
 Las evaluaciones se realizaron sin abrir ARCA, sin acceder al runtime privado y sin ejecutar acciones fiscales:

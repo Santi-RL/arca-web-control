@@ -110,6 +110,8 @@ La preparación vigente, su huella de página, el job inmutable, el alcance cerr
 
 La descarga directa se recibe primero en `downloads\.staging` mediante un nombre derivado del hash del `operationId`. Después de validar tipo, punto de venta, receptor, fecha, descripción, cantidad uno, precio unitario, subtotal e `Importe Total` contra el job, extraer un único número y CAE, comprobar la coincidencia con la pantalla y calcular SHA-256, se publica sin sobrescritura en:
 
+La validación de `Importe Total` reconstruye una única línea visual mediante las coordenadas de los `TextItem` del PDF; no depende de su orden lógico. Debe existir exactamente una etiqueta y un único importe monetario posterior en esa línea. Una segunda etiqueta, más de un importe o una geometría que no permita resolver la línea de forma inequívoca mantiene la operación en `unknown`.
+
 ```text
 downloads\Emisores\20-00000000-1 - EMISOR FICTICIO\Comprobantes Emitidos\2030\06\
   EMISOR FICTICIO - FC-C - 00001-00000042.pdf
