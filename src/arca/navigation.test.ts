@@ -119,6 +119,82 @@ test("selecciona el input exacto aunque ARCA muestre apellido y nombre en orden 
   }
 });
 
+test("acepta un segundo nombre solo cuando ARCA lo liga al CUIT exacto", async () => {
+  await withRepresentedSelector(`
+    <h1 id="selector-heading">Seleccione la empresa a representar</h1>
+    <p>Usuario: 20-00000000-1 - FICTICIO NOMBRE SEGUNDO</p>
+    <input id="target" type="submit" value="FICTICIO NOMBRE SEGUNDO">
+  `, async (page) => {
+    await selectRepresentedIssuer(page, "20000000001", "Nombre Ficticio", strictContext);
+    assert.equal(await page.evaluate(() => document.body.dataset.clicked), "target");
+  });
+});
+
+test("acepta que el nombre guardado tenga un segundo nombre omitido por ARCA", async () => {
+  await withRepresentedSelector(`
+    <h1 id="selector-heading">Seleccione la empresa a representar</h1>
+    <p>Usuario: 20-00000000-1 - FICTICIO NOMBRE</p>
+    <input id="target" type="submit" value="FICTICIO NOMBRE">
+  `, async (page) => {
+    await selectRepresentedIssuer(page, "20000000001", "Nombre Segundo Ficticio", strictContext);
+    assert.equal(await page.evaluate(() => document.body.dataset.clicked), "target");
+  });
+});
+
+test("no flexibiliza el nombre si el encabezado de ARCA no contiene el CUIT exacto", async () => {
+  await withRepresentedSelector(`
+    <h1>Seleccione la empresa a representar</h1>
+    <p>Usuario: 20-00000000-2 - OTRO NOMBRE; referencia 20-00000000-1 - FICTICIO NOMBRE SEGUNDO</p>
+    <input type="submit" value="FICTICIO NOMBRE SEGUNDO">
+  `, async (page) => {
+    await assert.rejects(
+      () => selectRepresentedIssuer(page, "20000000001", "Nombre Ficticio", strictContext),
+      /No se encontró un control accionable/i,
+    );
+  });
+});
+
+test("no flexibiliza más de un componente adicional del nombre", async () => {
+  await withRepresentedSelector(`
+    <h1>Seleccione la empresa a representar</h1>
+    <p>Usuario: 20-00000000-1 - FICTICIO NOMBRE SEGUNDO TERCERO</p>
+    <input type="submit" value="FICTICIO NOMBRE SEGUNDO TERCERO">
+  `, async (page) => {
+    await assert.rejects(
+      () => selectRepresentedIssuer(page, "20000000001", "Nombre Ficticio", strictContext),
+      /No se encontró un control accionable/i,
+    );
+  });
+});
+
+test("dos nombres canónicos distintos para el mismo CUIT bloquean la flexibilización", async () => {
+  await withRepresentedSelector(`
+    <h1>Seleccione la empresa a representar</h1>
+    <p>Usuario: 20-00000000-1 - FICTICIO NOMBRE SEGUNDO</p>
+    <p>Usuario: 20-00000000-1 - FICTICIO NOMBRE TERCERO</p>
+    <input type="submit" value="FICTICIO NOMBRE SEGUNDO">
+  `, async (page) => {
+    await assert.rejects(
+      () => selectRepresentedIssuer(page, "20000000001", "Nombre Ficticio", strictContext),
+      /No se encontró un control accionable/i,
+    );
+  });
+});
+
+test("dos controles con el nombre canónico flexible siguen siendo ambiguos", async () => {
+  await withRepresentedSelector(`
+    <h1>Seleccione la empresa a representar</h1>
+    <p>Usuario: 20-00000000-1 - FICTICIO NOMBRE SEGUNDO</p>
+    <input type="submit" value="FICTICIO NOMBRE SEGUNDO">
+    <input type="submit" value="SEGUNDO NOMBRE FICTICIO">
+  `, async (page) => {
+    await assert.rejects(
+      () => selectRepresentedIssuer(page, "20000000001", "Nombre Ficticio", strictContext),
+      /Selector ambiguo.*emisor\/representado/i,
+    );
+  });
+});
+
 test("dos controles con las mismas palabras del nombre detienen el selector por ambigüedad", async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -139,6 +215,27 @@ test("dos controles con las mismas palabras del nombre detienen el selector por 
     await browser.close();
   }
 });
+
+async function withRepresentedSelector(body: string, run: (page: Page) => Promise<void>): Promise<void> {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const scriptedBody = `${body}
+      <script>
+        document.querySelector('#target')?.addEventListener('click', (event) => {
+          event.preventDefault();
+          document.body.dataset.clicked = 'target';
+          document.querySelector('#selector-heading')?.remove();
+        });
+      </script>
+    `;
+    await page.context().route("https://fe.afip.gob.ar/rcel/jsp/index_bis.jsp", (route) => route.fulfill({ contentType: "text/html", body: scriptedBody }));
+    await page.goto("https://fe.afip.gob.ar/rcel/jsp/index_bis.jsp");
+    await run(page);
+  } finally {
+    await browser.close();
+  }
+}
 
 async function portalFixture(page: Page, resultCount: number): Promise<void> {
   const results = Array.from({ length: resultCount }, (_, index) => `

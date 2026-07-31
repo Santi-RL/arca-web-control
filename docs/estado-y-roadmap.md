@@ -1,6 +1,6 @@
 # Estado y roadmap del proyecto
 
-Última actualización: 2026-07-30.
+Última actualización: 2026-07-31.
 
 ## Estado actual
 
@@ -18,7 +18,7 @@ La plataforma soportada es Windows 10/11. Windows Credential Manager sigue siend
 - Proveedores de credenciales configurables (`windows` y `json-file`) con CUIT canónico, índice no secreto para resolver nombres, rechazo de hard links, errores sanitizados y huella del archivo verificada antes y después de cargar la clave.
 - Estado preparado inmutable con hash, huella de página y vencimiento de 60 minutos.
 - Ledger con estados `prepared`, `emitting`, `emitted`, `failed_before_emit` y `unknown`, dueño de proceso para reconstruir preparaciones huérfanas y normalización fail-closed de emisiones huérfanas o vencidas.
-- Selectores exactos, rechazo de ambigüedades y validación semántica de filas y secciones del resumen contra controles reales.
+- Selectores exactos, rechazo de ambigüedades y validación semántica de filas y secciones del resumen contra controles reales. La selección de representado admite orden invertido y un único segundo nombre o apellido omitido solo cuando ARCA asocia el nombre canónico al CUIT exacto y existe un único control coincidente.
 - Captura y validación del PDF, extracción local de número/CAE y reconciliación explícita de estados inciertos.
 - Archivo privado por CUIT emisor con staging, publicación sin sobrescritura, nombres legibles, metadatos JSON y organización anual/mensual.
 - Sesiones con lock, estado atómico, cierre controlado y detección de credenciales inválidas, captcha y expiración.

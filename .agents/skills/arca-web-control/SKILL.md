@@ -10,7 +10,7 @@ description: Controlar de forma conversacional, rápida y supervisada la web de 
 1. Para una operación conocida, leer `references/runtime.md`, `references/credentials.md`, `references/capabilities.md` y `references/job-v2.md`. Consultar `references/commands.md` solo si hace falta una primitiva de diagnóstico.
 2. Leer la documentación de desarrollo completa únicamente al cambiar código, aprender una variante o promover una capacidad; no ejecutar validaciones de repositorio antes de cada factura rutinaria.
 3. Ejecutar desde la raíz del repositorio y clasificar el pedido como conocido, variante, nuevo o irreversible.
-4. Tratar el CUIT como identidad única. Un nombre puede usarse si el proveedor devuelve exactamente un contribuyente; ante ambigüedad, pedir CUIT.
+4. Tratar el CUIT como identidad única. Un nombre puede usarse si el proveedor devuelve exactamente un contribuyente; ante ambigüedad, pedir CUIT. En el selector de representado, priorizar un control que contenga el CUIT exacto y luego el nombre completo sin importar el orden. Solo si ninguno aparece, admitir que el nombre guardado y el nombre canónico asociado por ARCA al CUIT exacto difieran en un único segundo nombre o apellido completo; el control accionable debe coincidir exactamente con ese nombre canónico y ser único. No usar distancia de edición, coincidencias parciales ni esta tolerancia sin el CUIT visible.
 5. Respetar el proveedor elegido por el usuario. No exigir el Administrador de credenciales de Windows, no repetir una clave en la respuesta y no trasladarla a argumentos, logs, Git o artefactos fiscales.
 
 ## Operación

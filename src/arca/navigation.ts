@@ -318,12 +318,25 @@ async function clickExactIssuerAction(page: Page, issuerCuit: string, issuerName
   }
 
   const byCuit = visibleActions.filter((action) => embeddedCuitPattern(issuerCuit).test(action.name));
+  const byExactName = issuerName
+    ? visibleActions.filter((action) => exactIdentityWordsMatch(action.name, issuerName))
+    : [];
+  const canonicalName = byCuit.length === 0 && byExactName.length === 0 && issuerName
+    ? await canonicalIdentityNameForCuit(page, issuerCuit)
+    : undefined;
+  const byCanonicalName = canonicalName && issuerName && compatibleIdentityWordsMatch(canonicalName, issuerName)
+    ? visibleActions.filter((action) => exactIdentityWordsMatch(action.name, canonicalName))
+    : [];
   const matches = byCuit.length > 0
     ? byCuit
-    : issuerName
-      ? visibleActions.filter((action) => exactIdentityWordsMatch(action.name, issuerName))
-      : [];
-  const candidateName = byCuit.length > 0 ? "control accionable por CUIT exacto" : "control accionable por nombre completo";
+    : byExactName.length > 0
+      ? byExactName
+      : byCanonicalName;
+  const candidateName = byCuit.length > 0
+    ? "control accionable por CUIT exacto"
+    : byExactName.length > 0
+      ? "control accionable por nombre completo"
+      : "control accionable por nombre canónico ligado al CUIT exacto";
 
   if (matches.length !== 1) {
     await context?.guided?.recordSelectorAttempt({
@@ -364,6 +377,38 @@ function exactIdentityWordsMatch(actual: string, expected: string): boolean {
   return actualWords.length > 0
     && actualWords.length === expectedWords.length
     && actualWords.every((word, index) => word === expectedWords[index]);
+}
+
+async function canonicalIdentityNameForCuit(page: Page, issuerCuit: string): Promise<string | undefined> {
+  const bodyText = await page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
+  const names = new Map<string, string>();
+  for (const line of bodyText.split(/\r?\n/)) {
+    const identityText = line.replace(/^\s*Usuario\s*:\s*/i, "");
+    if (identityText === line) continue;
+    const match = embeddedCuitPattern(issuerCuit).exec(identityText);
+    if (match?.index !== 0) continue;
+    const name = identityText.slice(match[0].length).replace(/^\s*-\s*/, "").trim();
+    const words = normalizedIdentityWords(name);
+    if (words.length > 0) names.set(words.join("\u0000"), name);
+  }
+  return names.size === 1 ? names.values().next().value : undefined;
+}
+
+function compatibleIdentityWordsMatch(actual: string, expected: string): boolean {
+  const actualWords = normalizedIdentityWords(actual);
+  const expectedWords = normalizedIdentityWords(expected);
+  if (actualWords.length < 2 || expectedWords.length < 2 || Math.abs(actualWords.length - expectedWords.length) > 1) {
+    return false;
+  }
+  const shorter = actualWords.length <= expectedWords.length ? actualWords : expectedWords;
+  const longer = actualWords.length <= expectedWords.length ? expectedWords : actualWords;
+  let longerIndex = 0;
+  return shorter.every((word) => {
+    while (longerIndex < longer.length && longer[longerIndex]! < word) longerIndex += 1;
+    if (longer[longerIndex] !== word) return false;
+    longerIndex += 1;
+    return true;
+  });
 }
 
 function normalizedIdentityWords(value: string): string[] {
