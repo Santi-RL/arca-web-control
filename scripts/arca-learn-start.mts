@@ -26,7 +26,7 @@ const stdoutPath = path.join(runtime.logs, `arca-learn-${timestamp}.out.log`);
 const stderrPath = path.join(runtime.logs, `arca-learn-${timestamp}.err.log`);
 const out = fsSync.openSync(stdoutPath, "a"); const err = fsSync.openSync(stderrPath, "a");
 const child = spawn(process.execPath, buildLearningWorkerArgs(path.resolve("scripts", "arca-learn.mts"), values), {
-  detached: false,
+  detached: true,
   stdio: ["ignore", out, err, "ipc"],
   windowsHide: true,
   env: { ...process.env, ARCA_LEARN_LAUNCH_ID: launchId },

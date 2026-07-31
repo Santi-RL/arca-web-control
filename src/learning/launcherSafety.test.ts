@@ -9,6 +9,7 @@ test("el launcher no termina PIDs recuperados del estado ni elimina locks ajenos
   assert.doesNotMatch(source, /process\.kill\s*\(/);
   assert.doesNotMatch(source, /fs\.rm\s*\(\s*lockPath/);
   assert.match(source, /child\.kill\s*\(\)/);
+  assert.match(source, /detached:\s*true/);
   assert.match(source, /stdio:\s*\["ignore", out, err, "ipc"\]/);
   assert.deepEqual(buildLearningWorkerArgs("worker.mts", ["--issuer", "emisor"]), ["--import", "tsx", "worker.mts", "--issuer", "emisor"]);
   assert.equal(isLearningShutdownMessage(learningShutdownMessage), true);
