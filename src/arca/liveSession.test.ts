@@ -271,6 +271,11 @@ test("missingExpectedSummarySignals no confunde el concepto con la descripción"
   assert.deepEqual(missingExpectedSummarySignals(bodyText, invoiceJob()), ["Conceptos a Incluir: Servicios"]);
 });
 
+test("missingExpectedSummarySignals acepta la grafía Incluír que muestra ARCA", () => {
+  const bodyText = completeSummaryBody().replace("Conceptos a Incluir Servicios", "Conceptos a Incluír Servicios");
+  assert.deepEqual(missingExpectedSummarySignals(bodyText, invoiceJob()), []);
+});
+
 test("missingExpectedSummarySignals exige una única línea con cantidad y precio unitario", () => {
   const bodyText = completeSummaryBody().replace("1,00 unidades", "2,00 unidades");
   assert.deepEqual(missingExpectedSummarySignals(bodyText, invoiceJob()), [

@@ -1133,7 +1133,7 @@ export function missingExpectedSummarySignals(
   const expectedDescription = evidence.description ?? job.description;
   const voucherType = extractSummaryVoucherType(bodyText);
   const pointOfSale = extractAfter(bodyText, /(?:^|\n)\s*Punto de Venta\s+([0-9]{1,5})\s*(?:\r?\n|$)/im);
-  const concept = extractAfter(bodyText, /(?:^|\n)\s*Conceptos? a Incluir\s+([^\r\n]+)/im);
+  const concept = extractAfter(bodyText, /(?:^|\n)\s*Conceptos? a Inclu[ií]r\s+([^\r\n]+)/im);
   const period = bodyText.match(/(?:^|\n)\s*Per[ií]odo Facturado\s+desde:\s*(\d{2}\/\d{2}\/\d{4})\s+hasta:\s*(\d{2}\/\d{2}\/\d{4})/im);
   const dueDate = extractAfter(bodyText, /(?:^|\n)\s*Vto\.?(?:\s+para el Pago)?\s+([0-9]{2}\/[0-9]{2}\/[0-9]{4})\s*(?:\r?\n|$)/im);
   const recipientBlock = extractSummarySection(bodyText, /Datos del Receptor/i, /Detalle de la Operaci[oó]n/i);
