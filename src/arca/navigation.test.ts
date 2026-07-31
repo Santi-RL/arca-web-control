@@ -92,6 +92,54 @@ test("prioriza el CUIT exacto sobre una etiqueta de nombre que podría correspon
   }
 });
 
+test("selecciona el input exacto aunque ARCA muestre apellido y nombre en orden inverso", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const body = `
+      <h1 id="selector-heading">Seleccione la empresa a representar</h1>
+      <p>Usuario: 20-00000000-1 - NOMBRE FICTICIO</p>
+      <input id="target" type="submit" value="FICTICIO NOMBRE">
+      <script>
+        document.querySelector('#target').addEventListener('click', (event) => {
+          event.preventDefault();
+          document.body.dataset.clicked = 'target';
+          document.querySelector('#selector-heading')?.remove();
+        });
+      </script>
+    `;
+    await page.context().route("https://fe.afip.gob.ar/rcel/jsp/index_bis.jsp", (route) => route.fulfill({ contentType: "text/html", body }));
+    await page.goto("https://fe.afip.gob.ar/rcel/jsp/index_bis.jsp");
+
+    await selectRepresentedIssuer(page, "20000000001", "Nombre Ficticio", strictContext);
+
+    assert.equal(await page.evaluate(() => document.body.dataset.clicked), "target");
+  } finally {
+    await browser.close();
+  }
+});
+
+test("dos controles con las mismas palabras del nombre detienen el selector por ambigüedad", async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    const body = `
+      <h1>Seleccione la empresa a representar</h1>
+      <input type="submit" value="FICTICIO NOMBRE">
+      <input type="submit" value="NOMBRE FICTICIO">
+    `;
+    await page.context().route("https://fe.afip.gob.ar/rcel/jsp/index_bis.jsp", (route) => route.fulfill({ contentType: "text/html", body }));
+    await page.goto("https://fe.afip.gob.ar/rcel/jsp/index_bis.jsp");
+
+    await assert.rejects(
+      () => selectRepresentedIssuer(page, "20000000001", "Nombre Ficticio", strictContext),
+      /Selector ambiguo.*emisor\/representado/i,
+    );
+  } finally {
+    await browser.close();
+  }
+});
+
 async function portalFixture(page: Page, resultCount: number): Promise<void> {
   const results = Array.from({ length: resultCount }, (_, index) => `
     <a class="service-result" href="#resultado-${index + 1}">

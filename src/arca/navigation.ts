@@ -1,4 +1,4 @@
-import { Page } from "playwright";
+import { Locator, Page } from "playwright";
 import { ArcaCredentials, RuntimeConfig } from "../types.js";
 import { pauseIfCaptcha } from "./captcha.js";
 import { FlowContext } from "./flowContext.js";
@@ -275,13 +275,6 @@ export async function selectRepresentedIssuer(page: Page, issuerCuit: string, is
 
   const requiresIssuerSelection = await page.getByText(/seleccione la empresa|empresa a representar/i).first().isVisible().catch(() => false);
   if (requiresIssuerSelection) {
-    const exactName = issuerName ? new RegExp(`^\\s*${escapeRegExp(issuerName)}\\s*$`, "i") : undefined;
-    const cuitPattern = embeddedCuitPattern(issuerCuit);
-    const issuerByCuit = page.getByText(cuitPattern);
-    const issuerByName = exactName ? page.getByText(exactName) : page.locator("__never__");
-    const issuerButtonByCuit = page.getByRole("button", { name: cuitPattern });
-    const issuerButtonByName = exactName ? page.getByRole("button", { name: exactName }) : page.locator("__never__");
-
     await context?.guided?.checkpoint(page, {
       title: "Emisor encontrado",
       expected: `Debe verse el emisor correcto para ${issuerName ?? issuerCuit}.`,
@@ -289,12 +282,7 @@ export async function selectRepresentedIssuer(page: Page, issuerCuit: string, is
     });
 
     assertOfficialArcaRcelUrl(page.url(), "la selección del representado");
-    await clickFirstVisible([
-      candidate(issuerButtonByCuit, `botón del CUIT emisor ${issuerCuit}`),
-      candidate(issuerByCuit, `texto CUIT emisor ${issuerCuit}`),
-      ...(issuerName ? [candidate(issuerButtonByName, `botón exacto del emisor ${issuerName}`)] : []),
-      ...(issuerName ? [candidate(issuerByName, `texto exacto del emisor ${issuerName}`)] : []),
-    ], "emisor/representado", context);
+    await clickExactIssuerAction(page, issuerCuit, issuerName, context);
     await waitForArcaDocumentReady(page);
     assertOfficialArcaRcelUrl(page.url(), "la validación posterior del representado");
 
@@ -319,8 +307,72 @@ export async function selectRepresentedIssuer(page: Page, issuerCuit: string, is
   });
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+async function clickExactIssuerAction(page: Page, issuerCuit: string, issuerName: string | undefined, context?: FlowContext): Promise<void> {
+  const actions = page.locator("button, a, input[type='button'], input[type='submit'], [role='button']");
+  const visibleActions: Array<{ locator: Locator; name: string }> = [];
+  for (let index = 0; index < await actions.count(); index += 1) {
+    const locator = actions.nth(index);
+    if (!await locator.isVisible().catch(() => false)) continue;
+    const name = await actionName(locator);
+    if (name) visibleActions.push({ locator, name });
+  }
+
+  const byCuit = visibleActions.filter((action) => embeddedCuitPattern(issuerCuit).test(action.name));
+  const matches = byCuit.length > 0
+    ? byCuit
+    : issuerName
+      ? visibleActions.filter((action) => exactIdentityWordsMatch(action.name, issuerName))
+      : [];
+  const candidateName = byCuit.length > 0 ? "control accionable por CUIT exacto" : "control accionable por nombre completo";
+
+  if (matches.length !== 1) {
+    await context?.guided?.recordSelectorAttempt({
+      action: "click",
+      description: "emisor/representado",
+      candidate: candidateName,
+      result: matches.length > 1 ? "ambiguous" : "not-visible",
+      visibleCount: matches.length,
+    });
+    if (matches.length > 1) {
+      throw new Error(`Selector ambiguo para "emisor/representado": ${candidateName} encontró ${matches.length} elementos visibles.`);
+    }
+    throw new Error("No se encontró un control accionable que coincida exactamente con el emisor/representado.");
+  }
+
+  await context?.guided?.recordSelectorAttempt({
+    action: "click",
+    description: "emisor/representado",
+    candidate: candidateName,
+    result: "used",
+    visibleCount: 1,
+  });
+  await matches[0]!.locator.click();
+}
+
+async function actionName(locator: Locator): Promise<string> {
+  return await locator.evaluate((element) => {
+    const inputValue = element instanceof HTMLInputElement ? element.value : "";
+    return (element.getAttribute("aria-label") || element.getAttribute("title") || inputValue || element.textContent || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }).catch(() => "");
+}
+
+function exactIdentityWordsMatch(actual: string, expected: string): boolean {
+  const actualWords = normalizedIdentityWords(actual);
+  const expectedWords = normalizedIdentityWords(expected);
+  return actualWords.length > 0
+    && actualWords.length === expectedWords.length
+    && actualWords.every((word, index) => word === expectedWords[index]);
+}
+
+function normalizedIdentityWords(value: string): string[] {
+  return (value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .match(/[a-z0-9]+/g) ?? [])
+    .sort();
 }
 
 function embeddedCuitPattern(value: string): RegExp {
