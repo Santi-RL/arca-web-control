@@ -2,6 +2,13 @@
 
 Este proyecto opera la web de ARCA con Playwright bajo supervisión humana. El CLI es el motor auditable; la skill y el MCP son capas superiores. Los Web Services oficiales de ARCA están fuera de alcance.
 
+## Flujo Git obligatorio
+
+- Trabajar siempre directamente sobre la rama `main`.
+- No crear ramas de trabajo, ramas temporales, feature branches ni ramas `codex/*`.
+- Antes de editar, commitear o publicar, verificar que la rama actual sea `main`; si no lo es, volver a `main` e integrar primero cualquier trabajo pendiente.
+- Cuando el usuario autorice commit y push, hacerlos directamente sobre `origin/main`.
+
 ## Antes de operar o cambiar el sistema
 
 Para una operación rutinaria conocida, leer `.agents/skills/arca-web-control/SKILL.md` y solo las referencias que esa skill indique para el pedido. Al cambiar el sistema, aprender una variante o promover una capacidad, leer además `docs/estado-y-roadmap.md`, `docs/operacion-chrome.md`, `docs/protocolo-aprendizaje-operativo.md` y `docs/capacidades.md`.
