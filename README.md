@@ -7,7 +7,7 @@ Skill y motor local experimental para operar la interfaz web de ARCA con Playwri
 
 ## Estado y alcance real
 
-Actualmente el alcance implementado se limita a una única capacidad fiscal:
+Actualmente el alcance implementado se limita a dos capacidades fiscales: una Factura C de Servicios para receptor identificado por CUIT y la variante separada para Consumidor Final anónimo. Ambas comparten este alcance:
 
 - Factura C.
 - Concepto `Servicios`.
@@ -18,7 +18,7 @@ Actualmente el alcance implementado se limita a una única capacidad fiscal:
 - Implementación de emisión y recuperación del PDF conservada para revalidación, pero deshabilitada por el manifiesto vigente.
 - Archivo privado estandarizado por CUIT emisor, con PDF, metadatos JSON, hash y publicación sin sobrescritura.
 
-La capacidad se encuentra en madurez `automated_to_summary`. Hubo una emisión real controlada con una versión anterior del tramo de descarga, pero la captura automática vigente del PDF todavía requiere una nueva validación visible. Por ese motivo, `lastValidatedVisible` permanece en `false`; `emit-prepared-invoice` y el modo oculto están deshabilitados por el manifiesto.
+Ambas capacidades se encuentran en madurez `automated_to_summary`. La capacidad con receptor identificado permanece pendiente de revalidación visible; la variante de Consumidor Final anónimo tiene una revalidación visible registrada, pero no fue promovida. Ninguna incluye `emit-prepared-invoice` ni permite modo oculto.
 
 No están soportados actualmente:
 
@@ -45,7 +45,7 @@ El núcleo público está compuesto por:
 - un MCP local `stdio` que reutiliza el mismo núcleo;
 - pruebas, documentación y mecanismos de seguridad e idempotencia.
 
-La skill está diseñada para Codex. Después de abrir la raíz del repositorio en Codex, invóquela explícitamente con `$arca-web-control` para que el agente cargue sus reglas operativas. La skill no es autónoma: depende del CLI versionado, las dependencias y los manifiestos de este repositorio. Otro agente puede adaptarla si sabe interpretar `SKILL.md` y ejecutar ese CLI local, pero esa compatibilidad no está garantizada.
+La skill es independiente del proveedor del agente: cualquier agente capaz de leer instrucciones Markdown y ejecutar comandos locales puede abrir `.agents/skills/arca-web-control/SKILL.md` y usar el CLI versionado. Las plataformas que descubren skills automáticamente pueden registrar esa carpeta; las demás pueden cargar `SKILL.md` de forma explícita. La skill depende del CLI, las dependencias y los manifiestos de este repositorio, no de plugins ni herramientas de revisión particulares. El archivo `agents/openai.yaml` es metadata de integración optativa y no condiciona el funcionamiento del núcleo.
 
 Las personalizaciones de cada instalación no forman parte del proyecto público. Credenciales, emisores, perfiles de regímenes, jobs reales, sesiones, aprendizaje crudo, capturas, logs, ledger, PDFs y metadatos deben permanecer fuera de Git. El runtime vive en `%LOCALAPPDATA%\ManejoARCA`; las claves pueden permanecer en Windows Credential Manager o en un archivo externo elegido por el usuario. Los comprobantes validados se organizan bajo `downloads\Emisores\<CUIT - nombre>\Comprobantes Emitidos\<AAAA>\<MM>`.
 

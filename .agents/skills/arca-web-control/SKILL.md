@@ -8,10 +8,9 @@ description: Controlar de forma conversacional, rápida y supervisada la web de 
 ## Preparación
 
 1. Para una operación conocida, leer `references/runtime.md`, `references/credentials.md`, `references/capabilities.md` y `references/job-v2.md`. Consultar `references/commands.md` solo si hace falta una primitiva de diagnóstico.
-2. Leer la documentación de desarrollo completa únicamente al cambiar código, aprender una variante o promover una capacidad; no ejecutar validaciones de repositorio antes de cada factura rutinaria.
-3. Ejecutar desde la raíz del repositorio y clasificar el pedido como conocido, variante, nuevo o irreversible.
-4. Tratar el CUIT como identidad única. Cuando el selector es un nombre, los comandos canónicos consultan primero el índice no secreto, antes de crear jobs, logs, workers o Chrome. Un nombre exacto puede usarse si identifica un único CUIT; ante un typo, orden invertido o un único segundo nombre omitido, mostrar nombre y CUIT de los candidatos y exigir confirmación humana aunque exista uno solo. Nunca cargar la clave ni iniciar sesión a partir de una sugerencia. En el selector de representado, priorizar un control que contenga el CUIT exacto y luego el nombre completo sin importar el orden. Solo si ninguno aparece, admitir que el nombre guardado y el nombre canónico asociado por ARCA al CUIT exacto difieran en un único segundo nombre o apellido completo; el control accionable debe coincidir exactamente con ese nombre canónico y ser único. No usar distancia de edición, coincidencias parciales ni esta tolerancia sin el CUIT visible.
-5. Respetar el proveedor elegido por el usuario. No exigir el Administrador de credenciales de Windows, no repetir una clave en la respuesta y no trasladarla a argumentos, logs, Git o artefactos fiscales.
+2. Ejecutar desde la raíz del repositorio y clasificar el pedido como conocido, variante, nuevo o irreversible.
+3. Tratar el CUIT como identidad única. Cuando el selector es un nombre, los comandos canónicos consultan primero el índice no secreto, antes de crear jobs, logs, workers o Chrome. Un nombre exacto puede usarse si identifica un único CUIT; ante un typo, orden invertido o un único segundo nombre omitido, mostrar nombre y CUIT de los candidatos y exigir confirmación humana aunque exista uno solo. Nunca cargar la clave ni iniciar sesión a partir de una sugerencia. En el selector de representado, priorizar un control que contenga el CUIT exacto y luego el nombre completo sin importar el orden. Solo si ninguno aparece, admitir que el nombre guardado y el nombre canónico asociado por ARCA al CUIT exacto difieran en un único segundo nombre o apellido completo; el control accionable debe coincidir exactamente con ese nombre canónico y ser único. No usar distancia de edición, coincidencias parciales ni esta tolerancia sin el CUIT visible.
+4. Respetar el proveedor elegido por el usuario. No exigir el Administrador de credenciales de Windows, no repetir una clave en la respuesta y no trasladarla a argumentos, logs, Git o artefactos fiscales.
 
 ## Operación
 
@@ -46,7 +45,7 @@ description: Controlar de forma conversacional, rápida y supervisada la web de 
 ## Rendimiento y mantenimiento
 
 - La resolución por nombre es un único preflight local. `arca:invoice:prepare-chat` y `arca:learn:start` ya lo incorporan; no duplicarlo en el camino normal. Ante una sugerencia, mostrarla y esperar confirmación en lugar de encadenar diagnósticos. Un nombre ausente o aproximado no debe crear logs, worker ni Chrome.
-- No ejecutar reparaciones recursivas, `takeown`, UAC, `npm audit`, tests, sincronización de capacidades ni `autoreview` durante una factura rutinaria.
+- No ejecutar tareas de desarrollo, validación de repositorio ni mantenimiento durante una factura rutinaria.
 - El arranque normal solo valida límites administrados del runtime y nunca enumera carpetas históricas desconocidas.
 - Al adoptar una versión nueva del layout sobre un runtime existente, el marcador privado obliga a ejecutar una única vez `arca:runtime:repair` antes de operar. Los arranques siguientes vuelven al camino O(1).
 - Usar `arca:runtime:repair` únicamente como mantenimiento explícito, fuera de una sesión fiscal y con su confirmación literal. El comando bloquea la reparación si detecta una sesión o aprendizaje vivos o si no puede verificar sus indicadores privados.
@@ -54,6 +53,6 @@ description: Controlar de forma conversacional, rápida y supervisada la web de 
 
 ## Aprendizaje durable
 
-No considerar aprendido un flujo hasta incorporar código Playwright, pruebas, manifiesto, recuperación, registro técnico sanitizado sin artefactos crudos, roadmap y referencias sincronizadas. Leer `docs/protocolo-aprendizaje-operativo.md` al desarrollar una capacidad. Ejecutar `arca:capability:sync` y `arca:capability:check`; actualizar este archivo solo si cambian reglas o secuencias operativas generales.
+`finish` produce únicamente un candidato privado. No convertir una observación real en capacidad productiva de forma automática: generalizarla en un flujo Playwright rígido, fixtures ficticios, pruebas, manifiesto, recuperación y documentación sanitizada, y exigir una validación humana visible separada.
 
 No habilitar `production-hidden` salvo que el manifiesto declare simultáneamente `maturity: fast_path` y `hiddenAllowed: true` después de validación humana real.

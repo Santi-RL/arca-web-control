@@ -32,7 +32,7 @@ La plataforma soportada es Windows 10/11. Windows Credential Manager sigue siend
 
 Se identificó que `ensureRuntimeLayout()` mezclaba la atestación necesaria con una reparación recursiva de todo `%LOCALAPPDATA%\ManejoARCA`. Una carpeta histórica desconocida e inaccesible podía bloquear durante minutos la creación de un job o el login, aunque no participara de la factura. La contraseña nunca fue el cuello de botella de ese incidente.
 
-El camino normal ahora valida y protege únicamente los límites administrados y el archivo fijo de atestación, en tiempo constante respecto del volumen histórico. Un runtime anterior sin marcador se bloquea hasta completar una única reparación. Esa reparación quedó separada en `arca:runtime:repair`, requiere confirmación literal, bloquea sesiones o aprendizajes vivos y solo puede recorrer subárboles administrados; nunca inspecciona carpetas históricas desconocidas. Una exclusión mutua del sistema operativo cubre sin carreras la reparación y la publicación del indicador de un nuevo arranque. Las validaciones de desarrollo, auditorías y `autoreview` tampoco forman parte del preámbulo de una factura rutinaria.
+El camino normal ahora valida y protege únicamente los límites administrados y el archivo fijo de atestación, en tiempo constante respecto del volumen histórico. Un runtime anterior sin marcador se bloquea hasta completar una única reparación. Esa reparación quedó separada en `arca:runtime:repair`, requiere confirmación literal, bloquea sesiones o aprendizajes vivos y solo puede recorrer subárboles administrados; nunca inspecciona carpetas históricas desconocidas. Una exclusión mutua del sistema operativo cubre sin carreras la reparación y la publicación del indicador de un nuevo arranque. Las validaciones, auditorías y revisiones de desarrollo tampoco forman parte del preámbulo de una factura rutinaria.
 
 La skill dejó de imponer un almacén único. El usuario conserva la responsabilidad sobre las claves: puede mantener Windows Credential Manager o señalar un archivo JSON externo, regular y fuera de Git. Ningún proveedor transporta la clave por argumentos, estado de sesión, MCP o logs.
 
@@ -122,7 +122,7 @@ Antes de publicar o promover una capacidad deben aprobarse:
 - `npm audit --audit-level=high`;
 - `npm run arca:capability:check`;
 - `npm run mcp:smoke`;
-- revisión de seguridad y `autoreview` sin hallazgos accionables pendientes.
+- revisión de seguridad y revisión independiente de código sin hallazgos accionables pendientes.
 
 Las pruebas automatizadas usan fixtures ficticios o una web local simulada; no ejecutan acciones fiscales reales.
 
@@ -132,10 +132,10 @@ Antes de recrear la historia Git pública se obtuvieron estos resultados locales
 
 - `npm test`: 206 pruebas aprobadas, sin fallos;
 - `npm run typecheck`, `npm run arca:capability:check`, `npm run validate:skill` y `npm run mcp:smoke`: aprobados;
-- `quick_validate.py` oficial de `skill-creator`: skill válida;
+- validación estructural de la skill: aprobada;
 - `npm audit --audit-level=high`: 0 vulnerabilidades;
 - `git diff --check`: aprobado;
-- `autoreview` con GPT-5.6 Sol y razonamiento alto: dos pasadas, 0 hallazgos accionables; revisión de secretos limpia.
+- revisión independiente de código en dos pasadas, sin hallazgos accionables; revisión de secretos limpia.
 
 El validador público no encontró incidencias en el árbol saneado y bloqueó únicamente objetos de la historia Git local anterior. Esa historia se conserva en un respaldo privado y debe sustituirse por un baseline nuevo antes de cualquier publicación.
 

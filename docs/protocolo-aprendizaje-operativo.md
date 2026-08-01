@@ -1,6 +1,6 @@
 # Protocolo de aprendizaje operativo
 
-Este protocolo aplica al desarrollo o a una variante nueva. Una operación rutinaria de una capacidad ya implementada no ejecuta sincronización, pruebas, auditorías ni `autoreview` como precondición.
+Este protocolo aplica al desarrollo o a una variante nueva. Una operación rutinaria de una capacidad ya implementada no ejecuta sincronización, pruebas, auditorías ni revisiones de código como precondición.
 
 Este protocolo convierte una operación nueva o una variante de ARCA en una capacidad reproducible. El aprendizaje nunca queda solamente en el chat.
 
@@ -46,7 +46,7 @@ Solo `fast_path` puede declarar `hiddenAllowed: true`, después de una corrida r
 4. Ejecutar `arca:capability:sync` y `arca:capability:check`.
 5. Actualizar `docs/estado-y-roadmap.md` con evidencia.
 6. Actualizar la skill si cambian reglas generales; sincronizar siempre sus referencias.
-7. Ejecutar seguridad, `npm test`, `typecheck`, `npm audit` y `autoreview`.
+7. Ejecutar revisión de seguridad, `npm test`, `typecheck`, `npm audit` y una revisión independiente de código.
 8. Realizar la primera corrida visible con validación humana.
 
 Si falta un punto, asignar únicamente la madurez que la evidencia disponible permita. `automated_to_summary` exige que todo el recorrido hasta el resumen sea reproducible y esté probado; `controlled_irreversible` exige además una validación visible vigente de la acción final y su evidencia. Nunca promover automáticamente.
