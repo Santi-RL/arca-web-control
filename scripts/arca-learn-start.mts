@@ -5,11 +5,13 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { ensureRuntimeLayout, getRuntimePaths } from "../src/config/runtimePaths.js";
+import { resolveCredentialRoutingIdentity } from "../src/config/env.js";
+import { credentialProviderFingerprint, sessionCredentialProviderFingerprintEnv } from "../src/config/credentialProvider.js";
 import { acquireRuntimeMaintenanceTransition } from "../src/config/runtimeMaintenance.js";
 import { isProcessAlive } from "../src/io/processLock.js";
 import { invalidCredentialsErrorFromLog, startupErrorFromLog } from "../src/arca/loginErrors.js";
 import { CaptchaRequiredError } from "../src/arca/captchaErrors.js";
-import { buildLearningWorkerArgs, learningShutdownMessage } from "../src/learning/launcher.js";
+import { buildLearningWorkerArgs, learningShutdownMessage, replaceLearningIssuerWithCuit } from "../src/learning/launcher.js";
 import { readCurrentLearningStateIfExists } from "../src/learning/sessionState.js";
 
 const runtimeCandidate = getRuntimePaths();
@@ -21,15 +23,23 @@ const currentPath = path.join(runtime.learning, "current.json");
 const launchId = randomUUID();
 const existing = await readCurrentLearningStateIfExists(currentPath);
 if (existing && isProcessAlive(existing.pid)) throw new Error(`Ya existe un aprendizaje ARCA activo (PID ${existing.pid}). Finalizalo o abortalo antes de iniciar otro.`);
+const issuerSelector = requiredArgument(values, "--issuer");
+const providerFingerprint = credentialProviderFingerprint(runtime);
+const issuerIdentity = resolveCredentialRoutingIdentity(issuerSelector);
+const workerValues = replaceLearningIssuerWithCuit(values, issuerIdentity.cuit);
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 const stdoutPath = path.join(runtime.logs, `arca-learn-${timestamp}.out.log`);
 const stderrPath = path.join(runtime.logs, `arca-learn-${timestamp}.err.log`);
 const out = fsSync.openSync(stdoutPath, "a"); const err = fsSync.openSync(stderrPath, "a");
-const child = spawn(process.execPath, buildLearningWorkerArgs(path.resolve("scripts", "arca-learn.mts"), values), {
+const child = spawn(process.execPath, buildLearningWorkerArgs(path.resolve("scripts", "arca-learn.mts"), workerValues), {
   detached: true,
   stdio: ["ignore", out, err, "ipc"],
   windowsHide: true,
-  env: { ...process.env, ARCA_LEARN_LAUNCH_ID: launchId },
+  env: {
+    ...process.env,
+    ARCA_LEARN_LAUNCH_ID: launchId,
+    [sessionCredentialProviderFingerprintEnv]: providerFingerprint,
+  },
 });
 try {
   const deadline = Date.now() + 300000;
@@ -85,6 +95,14 @@ async function workerExitError(): Promise<Error> {
 
 async function readWorkerLog(): Promise<string> {
   return fs.readFile(stderrPath, "utf8").then((value) => value.slice(-32_768)).catch(() => "");
+}
+
+function requiredArgument(args: string[], name: string): string {
+  const indexes = args.flatMap((value, index) => value === name ? [index] : []);
+  if (indexes.length !== 1) throw new Error(`El inicio de aprendizaje requiere un único ${name}.`);
+  const value = args[(indexes[0] as number) + 1];
+  if (!value || value.startsWith("--")) throw new Error(`Falta el valor de ${name}.`);
+  return value;
 }
 } finally {
   await releaseRuntimeTransition();

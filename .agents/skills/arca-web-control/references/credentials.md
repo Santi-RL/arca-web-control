@@ -6,6 +6,8 @@ El usuario decide dónde almacenar las claves y asume la protección del medio e
 
 Sin configuración adicional se usa `ManejoARCA/CUIT/<cuit>` en el Administrador de credenciales. Los comandos `arca:credentials:set`, `list`, `update`, `delete` y `migrate-*` administran exclusivamente este proveedor.
 
+`arca:credentials:list` muestra únicamente nombre descriptivo y CUIT. Esos datos pertenecen al índice no secreto del usuario y pueden mostrarse completos cuando lo solicita; la clave nunca forma parte de esa salida.
+
 ## Archivo JSON elegido por el usuario
 
 El archivo debe estar fuera del repositorio, ser regular, no ser un enlace o junction y medir como máximo 1 MiB. ARCA Web Control lo abre solo para lectura y no modifica sus permisos. El usuario puede crearlo con la herramienta local que prefiera y comunicar al agente únicamente su ruta; no hace falta incorporarlo al proyecto. Formato:
@@ -48,7 +50,10 @@ Las variables de entorno prevalecen sobre `arca:credentials:provider -- set`. `A
 ## Invariantes
 
 - CUIT válido y único; el nombre solo resuelve si corresponde a un único CUIT.
+- `arca:issuer:resolve -- --issuer "<nombre-o-CUIT>"` consulta una sola vez el índice no secreto. Una coincidencia exacta devuelve la identidad; una variante acotada por typo, orden invertido o un segundo nombre omitido devuelve candidatos con nombre y CUIT y exige confirmación, incluso si hay uno solo.
 - La resolución rutinaria por nombre usa el índice local no secreto; la clave se carga únicamente dentro del proceso de sesión y no viaja por argumentos, MCP, estado, logs ni archivos fiscales.
 - El launcher fija una huella no reversible del proveedor; si la configuración cambia antes de cargar la clave, cancela el inicio.
 - Una clave incorrecta produce un único intento de login y detención inmediata.
-- Los errores públicos distinguen ausencia, ambigüedad y proveedor no disponible sin revelar registros ni secretos.
+- Los errores públicos distinguen ausencia, ambigüedad, sugerencia pendiente y proveedor no disponible. Pueden incluir candidatos del índice no secreto, pero nunca claves, rutas privadas, huellas ni registros internos.
+
+Cuando el ejecutor aísla el PasswordVault de Windows, la consulta debe hacerse en el mismo contexto del usuario que posee el almacén. Un índice vacío obtenido desde otro contexto no es evidencia suficiente para afirmar que no hay emisores; no se deben encadenar diagnósticos ni abrir Chrome por ese motivo.

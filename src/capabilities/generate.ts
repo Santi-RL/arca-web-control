@@ -11,6 +11,7 @@ const commands = [
   ["arca:credentials:migrate-vault", "Migra explícitamente credenciales legacy al esquema canónico por CUIT."],
   ["arca:credentials:import-csv", "Importa localmente un CSV privado con simulación, CUIT único y rollback."],
   ["arca:credentials:provider", "Consulta o selecciona Windows o un archivo JSON externo administrado por el usuario."],
+  ["arca:issuer:resolve", "Resuelve rápidamente un emisor sobre el índice no secreto y propone candidatos sin cargar claves."],
   ["arca:invoice:prepare-chat", "Valida datos conversacionales, crea o reutiliza el job privado idempotente, inicia o reutiliza Chrome visible y devuelve el resumen."],
   ["arca:session:start", "Inicia una sesión y exige READY_STATE=portal; la revalidación irreversible requiere un modo visible explícito y exclusivo."],
   ["arca:session:cmd", "Ejecuta comandos tipados sobre la sesión actual; resume-authentication exige una intervención humana previa y revalidate-prepared-invoice exige preparedInvoiceId vigente y EMITIR."],
@@ -50,7 +51,7 @@ export function renderSkillCapabilities(manifests: CapabilityManifest[]): string
 function renderRuntimeScope(manifest: CapabilityManifest): string {
   const scope = manifest.runtimeScope;
   if (scope?.kind !== "invoice") return "No aplica";
-  return `\`${scope.voucherType}\` / \`${scope.concept}\` / \`${scope.currency}\` / ${scope.itemCount} ítem${scope.itemCount === 1 ? "" : "s"}`;
+  return `\`${scope.voucherType}\` / \`${scope.concept}\` / \`${scope.currency}\` / ${scope.itemCount} ítem${scope.itemCount === 1 ? "" : "s"} / receptor \`${scope.recipientKind}\``;
 }
 
 export function renderSkillCommands(manifests: CapabilityManifest[]): string {

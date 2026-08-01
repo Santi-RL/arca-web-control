@@ -10,6 +10,7 @@ Archivo generado desde el registro de comandos del proyecto. No editar manualmen
 - `npm run arca:credentials:migrate-vault`: Migra explícitamente credenciales legacy al esquema canónico por CUIT.
 - `npm run arca:credentials:import-csv`: Importa localmente un CSV privado con simulación, CUIT único y rollback.
 - `npm run arca:credentials:provider`: Consulta o selecciona Windows o un archivo JSON externo administrado por el usuario.
+- `npm run arca:issuer:resolve`: Resuelve rápidamente un emisor sobre el índice no secreto y propone candidatos sin cargar claves.
 - `npm run arca:invoice:prepare-chat`: Valida datos conversacionales, crea o reutiliza el job privado idempotente, inicia o reutiliza Chrome visible y devuelve el resumen.
 - `npm run arca:session:start`: Inicia una sesión y exige READY_STATE=portal; la revalidación irreversible requiere un modo visible explícito y exclusivo.
 - `npm run arca:session:cmd`: Ejecuta comandos tipados sobre la sesión actual; resume-authentication exige una intervención humana previa y revalidate-prepared-invoice exige preparedInvoiceId vigente y EMITIR.

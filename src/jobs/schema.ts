@@ -21,14 +21,10 @@ const outputSubdirectory = z.string().trim().min(1).superRefine((value, context)
   }
 });
 
-export const invoiceJobV2Schema = z.object({
+const invoiceJobCommonShape = {
   schemaVersion: z.literal(2),
   operationId: z.string().trim().min(8).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]+$/),
   issuerKey: cuit,
-  recipientCuit: cuit,
-  recipientName: z.string().trim().min(1).optional(),
-  recipientVatCondition: z.string().trim().min(1),
-  recipientCommercialAddress: z.string().trim().min(1).optional(),
   voucherType: z.string().trim().min(1),
   pointOfSale: z.string().trim().regex(/^\d{1,5}$/, "pointOfSale debe contener entre uno y cinco dígitos.").transform((value) => value.padStart(5, "0")),
   date: isoDate,
@@ -44,7 +40,30 @@ export const invoiceJobV2Schema = z.object({
   unit: z.string().trim().min(1).optional(),
   amount: decimalAmount,
   outputDir: outputSubdirectory.optional().default("."),
-}).strict().superRefine((job, context) => {
+};
+
+const identifiedRecipientInvoiceJobSchema = z.object({
+  ...invoiceJobCommonShape,
+  recipientKind: z.never().optional(),
+  recipientCuit: cuit,
+  recipientName: z.string().trim().min(1).optional(),
+  recipientVatCondition: z.string().trim().min(1),
+  recipientCommercialAddress: z.string().trim().min(1).optional(),
+}).strict();
+
+const anonymousFinalConsumerInvoiceJobSchema = z.object({
+  ...invoiceJobCommonShape,
+  recipientKind: z.literal("anonymous-final-consumer"),
+  recipientVatCondition: z.literal("Consumidor Final"),
+  recipientCuit: z.never().optional(),
+  recipientName: z.never().optional(),
+  recipientCommercialAddress: z.never().optional(),
+}).strict();
+
+export const invoiceJobV2Schema = z.union([
+  identifiedRecipientInvoiceJobSchema,
+  anonymousFinalConsumerInvoiceJobSchema,
+]).superRefine((job, context) => {
   if (job.billingPeriodFrom && job.billingPeriodTo && job.billingPeriodFrom > job.billingPeriodTo) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["billingPeriodTo"], message: "El fin del período no puede ser anterior al inicio." });
   }
@@ -81,7 +100,6 @@ export function parseInvoiceJobJson(raw: string, sourceLabel = "job privado", do
   const amountCents = decimalToCents(parsed.amount);
   return {
     ...parsed,
-    recipientCuit: parsed.recipientCuit,
     amount: amountCents / 100,
     amountCents,
     amountDecimal: parsed.amount,

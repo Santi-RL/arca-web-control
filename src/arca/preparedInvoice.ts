@@ -15,10 +15,13 @@ export type PreparedInvoiceSummary = {
   billingPeriodFrom?: string;
   billingPeriodTo?: string;
   dueDate?: string;
-  recipientCuit: string;
+  recipientKind: "identified-cuit" | "anonymous-final-consumer";
+  recipientCuit?: string;
   recipientName?: string;
   recipientVatCondition?: string;
   recipientCommercialAddress?: string;
+  recipientEmailBlank?: true;
+  recipientAssociatedVoucherAbsent?: true;
   saleCondition?: string;
   description: string;
   quantity: string;

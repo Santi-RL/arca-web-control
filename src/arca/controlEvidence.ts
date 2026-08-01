@@ -2,8 +2,15 @@ import { Locator, Page } from "playwright";
 import { ResolvedInvoiceJob } from "../types.js";
 import { formatDateForArca } from "../utils/date.js";
 import { assertOfficialArcaRcelUrl } from "./officialUrls.js";
-import { commercialAddressesMatch, readRecipientCommercialAddress } from "./recipientCommercialAddress.js";
+import {
+  commercialAddressesMatch,
+  isCommercialAddressPlaceholder,
+  readRecipientCommercialAddress,
+  recipientCommercialAddressInput,
+  recipientCommercialAddressSelect,
+} from "./recipientCommercialAddress.js";
 import { captureIssuerControlEvidence } from "./issuerEvidence.js";
+import { assertSelectedOptionContaining, waitForUniqueSelectedEnabledOptionByVisibleText } from "./pageHelpers.js";
 
 export type InvoiceControlEvidence = {
   issuer?: string;
@@ -13,10 +20,17 @@ export type InvoiceControlEvidence = {
   billingPeriodFrom?: string;
   billingPeriodTo?: string;
   dueDate?: string;
+  recipientKind?: "identified-cuit" | "anonymous-final-consumer";
   recipientCuit?: string;
   recipientName?: string;
   recipientCommercialAddress?: string;
   recipientVatCondition?: string;
+  recipientDocumentTypeDefault?: "CUIT";
+  recipientDocumentNumberBlank?: true;
+  recipientNameBlank?: true;
+  recipientCommercialAddressBlank?: true;
+  recipientEmailBlank?: true;
+  recipientAssociatedVoucherAbsent?: true;
   description?: string;
   amount?: string;
   quantity?: string;
@@ -56,6 +70,42 @@ export async function captureCurrencyEvidence(page: Page, job: ResolvedInvoiceJo
 
 export async function captureRecipientEvidence(page: Page, job: ResolvedInvoiceJob): Promise<InvoiceControlEvidence> {
   assertOfficialArcaRcelUrl(page.url(), "la captura de datos del receptor");
+  const absentOptionalFields = await captureAbsentOptionalRecipientFields(page);
+  if (job.recipientKind === "anonymous-final-consumer") {
+    const documentTypeControl = await uniqueVisible(
+      page.locator("#idtipodocreceptor, select[name*='tipodoc' i], select[id*='tipodoc' i]"),
+      "tipo de documento del Consumidor Final",
+    );
+    const recipientDocumentTypeDefault = await waitForUniqueSelectedEnabledOptionByVisibleText(
+      documentTypeControl,
+      "CUIT",
+      "tipo de documento predeterminado del Consumidor Final",
+    );
+    const recipientDocumentNumberBlank = await requireBlankInput(
+      page.locator("#nrodocreceptor"),
+      "número de documento del Consumidor Final",
+    );
+    const recipientNameBlank = await requireBlankInput(
+      page.locator("#razonsocialreceptor"),
+      "razón social del Consumidor Final",
+    );
+    const recipientCommercialAddressBlank = await requireBlankAnonymousRecipientAddress(page);
+    const vatControl = await uniqueVisible(page.locator("#idivareceptor, select[name*='ivareceptor' i]"), "condición IVA receptor");
+    const vat = await requireSelectedVatCondition(vatControl, "Consumidor Final", true);
+    if (!sameText(vat, "Consumidor Final")) {
+      throw new Error("La condición IVA visible del receptor anónimo no es exactamente Consumidor Final.");
+    }
+    return {
+      recipientKind: "anonymous-final-consumer",
+      recipientVatCondition: vat,
+      recipientDocumentTypeDefault,
+      recipientDocumentNumberBlank,
+      recipientNameBlank,
+      recipientCommercialAddressBlank,
+      ...absentOptionalFields,
+    };
+  }
+
   const recipientCuitControl = await uniqueVisible(page.locator("#nrodocreceptor"), "CUIT del receptor");
   const recipientCuit = (await recipientCuitControl.inputValue()).trim();
   if (!/^[0-9]{11}$/u.test(recipientCuit) || !recipientCuitsMatch(recipientCuit, job.recipientCuit)) {
@@ -73,12 +123,91 @@ export async function captureRecipientEvidence(page: Page, job: ResolvedInvoiceJ
   if (job.recipientCommercialAddress && !commercialAddressesMatch(address, job.recipientCommercialAddress)) {
     throw new Error(`El domicilio comercial visible no coincide con el job. Esperado: ${job.recipientCommercialAddress}; visible: ${address}.`);
   }
-  const vat = await optionalSelectedText(page.locator("#idivareceptor"));
-  if (!vat) throw new Error("ARCA no mostró una condición frente al IVA seleccionada para el receptor.");
+  const vatControl = await uniqueVisible(page.locator("#idivareceptor, select[name*='ivareceptor' i]"), "condición IVA receptor");
+  const vat = await requireSelectedVatCondition(vatControl, job.recipientVatCondition, false);
   if (!sameText(vat, job.recipientVatCondition)) {
     throw new Error(`La condición IVA visible no coincide: ${vat}.`);
   }
-  return compact({ recipientCuit, recipientName, recipientCommercialAddress: address, recipientVatCondition: vat });
+  return compact({
+    recipientKind: "identified-cuit",
+    recipientCuit,
+    recipientName,
+    recipientCommercialAddress: address,
+    recipientVatCondition: vat,
+    ...absentOptionalFields,
+  });
+}
+
+async function captureAbsentOptionalRecipientFields(
+  page: Page,
+): Promise<Pick<InvoiceControlEvidence, "recipientEmailBlank" | "recipientAssociatedVoucherAbsent">> {
+  await requireBlankInput(page.locator("input#email[name='emailReceptor']"), "email del receptor");
+  await requireBlankInput(page.locator("input[name='cmpAsociadoPtoVta']"), "punto de venta del comprobante asociado");
+  await requireBlankInput(page.locator("input[name='cmpAsociadoNro']"), "número del comprobante asociado");
+  await requireBlankInput(page.locator("input[name='cmpAsociadoFechaEmision']"), "fecha de emisión del comprobante asociado");
+  return { recipientEmailBlank: true, recipientAssociatedVoucherAbsent: true };
+}
+
+async function requireSelectedVatCondition(locator: Locator, expected: string, anonymous: boolean): Promise<string> {
+  try {
+    return await assertSelectedOptionContaining(locator, expected);
+  } catch (error) {
+    if (error instanceof Error && /no quedó seleccionada de forma verificable/i.test(error.message)) {
+      throw new Error(anonymous
+        ? "La condición IVA visible del receptor anónimo no es exactamente Consumidor Final."
+        : "La condición IVA visible no coincide con el job.");
+    }
+    throw error;
+  }
+}
+
+async function requireBlankInput(locator: Locator, name: string): Promise<true> {
+  const control = await uniqueVisible(locator, name);
+  if ((await control.inputValue()).trim() !== "") {
+    throw new Error(`${name}: ARCA mostró un valor inesperado; la preparación fue bloqueada.`);
+  }
+  return true;
+}
+
+async function requireBlankAnonymousRecipientAddress(page: Page): Promise<true> {
+  assertOfficialArcaRcelUrl(page.url(), "la verificación del domicilio vacío del receptor anónimo");
+  const visibleControls = await visibleLocators(page.locator(`${recipientCommercialAddressSelect}, ${recipientCommercialAddressInput}`));
+  if (visibleControls.length !== 1) {
+    throw new Error(`Domicilio del Consumidor Final: se esperaba un único control visible y se encontraron ${visibleControls.length}.`);
+  }
+
+  const control = visibleControls[0] as Locator;
+  const tagName = await control.evaluate((element) => element.tagName.toLowerCase());
+  if (tagName === "select") {
+    const select = control;
+    const selectedOptions = select.locator("option:checked");
+    if (await selectedOptions.count() !== 1) {
+      throw new Error("Domicilio del Consumidor Final: ARCA no mostró una única opción seleccionada.");
+    }
+    const selected = selectedOptions.first();
+    const text = ((await selected.textContent()) ?? "").trim();
+    const value = await selected.getAttribute("value");
+    const blank = (text === "" && (value === null || value === "" || value === "-1"))
+      || isCommercialAddressPlaceholder(text, value);
+    if (!blank) {
+      throw new Error("Domicilio del Consumidor Final: ARCA mostró un valor inesperado; el flujo anónimo fue bloqueado.");
+    }
+    return true;
+  }
+
+  if (tagName !== "input" || (await control.inputValue()).trim() !== "") {
+    throw new Error("Domicilio del Consumidor Final: ARCA mostró un valor inesperado; el flujo anónimo fue bloqueado.");
+  }
+  return true;
+}
+
+async function visibleLocators(locator: Locator): Promise<Locator[]> {
+  const visible: Locator[] = [];
+  for (let index = 0; index < await locator.count(); index += 1) {
+    const current = locator.nth(index);
+    if (await current.isVisible().catch(() => false)) visible.push(current);
+  }
+  return visible;
 }
 
 const LEGAL_ENTITY_FORMS = new Set(["SA", "SAU", "SAS", "SRL", "SC", "SCA", "SCS", "SH", "UTE"]);
@@ -209,12 +338,6 @@ async function optionalInput(locator: Locator): Promise<string | undefined> {
   assertOfficialArcaRcelUrl(locator.page().url(), "la lectura de un dato fiscal opcional");
   if (await locator.count() !== 1 || !await locator.isVisible().catch(() => false)) return undefined;
   return (await locator.inputValue().catch(() => "")).trim() || undefined;
-}
-
-async function optionalSelectedText(locator: Locator): Promise<string | undefined> {
-  assertOfficialArcaRcelUrl(locator.page().url(), "la lectura de una selección fiscal");
-  if (await locator.count() !== 1 || !await locator.isVisible().catch(() => false)) return undefined;
-  return (await locator.locator("option:checked").textContent().catch(() => ""))?.trim() || undefined;
 }
 
 async function uniqueVisible(locator: Locator, name: string): Promise<Locator> {

@@ -68,6 +68,32 @@ test("valida CUIT, dinero y coherencia fiscal básica", () => {
   assert.throws(() => invoiceJobV2Schema.parse({ ...validJob, recipientVatCondition: undefined }), /recipientVatCondition|invalid/i);
 });
 
+test("preserva sin discriminante los jobs históricos con receptor identificado", () => {
+  const parsed = invoiceJobV2Schema.parse(validJob);
+  assert.equal(Object.hasOwn(parsed, "recipientKind"), false);
+  assert.equal(parsed.recipientCuit, validJob.recipientCuit);
+});
+
+test("modela al consumidor final anónimo sin datos identificatorios", () => {
+  const { recipientCuit: _recipientCuit, ...withoutIdentifiedRecipient } = validJob;
+  const anonymousJob = {
+    ...withoutIdentifiedRecipient,
+    recipientKind: "anonymous-final-consumer",
+    recipientVatCondition: "Consumidor Final",
+  };
+  const parsed = invoiceJobV2Schema.parse(anonymousJob);
+  assert.equal(parsed.recipientKind, "anonymous-final-consumer");
+  assert.equal(Object.hasOwn(parsed, "recipientCuit"), false);
+  assert.equal(Object.hasOwn(parsed, "recipientName"), false);
+  assert.equal(Object.hasOwn(parsed, "recipientCommercialAddress"), false);
+
+  assert.equal(invoiceJobV2Schema.safeParse({ ...anonymousJob, recipientVatCondition: "IVA Responsable Inscripto" }).success, false);
+  assert.equal(invoiceJobV2Schema.safeParse({ ...anonymousJob, recipientCuit: validJob.recipientCuit }).success, false);
+  assert.equal(invoiceJobV2Schema.safeParse({ ...anonymousJob, recipientName: "RECEPTOR FICTICIO" }).success, false);
+  assert.equal(invoiceJobV2Schema.safeParse({ ...anonymousJob, recipientCommercialAddress: "DOMICILIO FICTICIO 123" }).success, false);
+  assert.equal(invoiceJobV2Schema.safeParse(withoutIdentifiedRecipient).success, false);
+});
+
 test("Servicios aplica vencimiento de cinco días corridos cuando se omite", () => {
   const parsed = invoiceJobV2Schema.parse({ ...validJob, dueDate: undefined });
   assert.equal(parsed.dueDate, "2030-06-20");

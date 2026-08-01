@@ -8,6 +8,7 @@ Para una operación rutinaria conocida, leer `.agents/skills/arca-web-control/SK
 
 ## Rutas obligatorias
 
+- Resolución de emisor: cuando el selector es un nombre, los comandos canónicos consultan el índice local no secreto antes de crear jobs, logs, workers o Chrome. Si hace falta resolver cualquier selector de forma independiente, usar `arca:issuer:resolve`; una sugerencia por typo, orden o segundo nombre omitido siempre requiere confirmación humana y nunca carga la clave.
 - Factura con datos recibidos por chat: usar `arca:invoice:prepare-chat` por `stdin`; esa operación valida los datos, crea o reutiliza el job privado idempotente, inicia o reutiliza Chrome visible y devuelve el resumen sin exponer handles internos.
 - Login o diagnóstico de bajo nivel: `npm run arca:session:start -- --issuer <cuit>`, exigir `READY_STATE=portal` y continuar sobre esa misma sesión con `arca:session:cmd`.
 - Navegación: actuar desde la pantalla actual. No reiniciar, volver al portal, abrir URLs directas ni crear scripts temporales salvo pedido explícito.
@@ -21,6 +22,7 @@ Para una operación rutinaria conocida, leer `.agents/skills/arca-web-control/SK
 ## Seguridad fiscal
 
 - No imprimir, registrar ni incorporar a Git claves, cookies, tokens, storage o perfiles. El usuario elige el proveedor de credenciales y asume la protección del almacén elegido; Windows es el predeterminado y `json-file` permite señalar un archivo externo administrado por el usuario. El CUIT es la identidad única y el nombre solo resuelve si identifica exactamente un contribuyente.
+- Los nombres descriptivos y CUIT del índice configurado son metadatos no secretos accesibles para su usuario: pueden mostrarse como candidatos o listarse cuando el usuario lo solicite. Nunca incluir con ellos claves, rutas del proveedor, huellas, registros internos ni material de sesión.
 - La importación CSV se ejecuta únicamente desde `%LOCALAPPDATA%\ManejoARCA\private-import`: nunca adjuntar el archivo al chat, incorporarlo a Git, pasarlo como argumento ni registrar filas o secretos.
 - No resolver ni automatizar captchas. Pausar y pedir intervención humana; reanudar la misma sesión únicamente mediante `resume-authentication` después de un nuevo mensaje del usuario.
 - Fuera del carril explícito de revalidación irreversible visible, no emitir en la versión vigente. Si una versión futura vuelve a habilitar la acción, no emitir sin confirmación humana exacta `EMITIR`.

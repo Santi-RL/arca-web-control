@@ -1,6 +1,6 @@
 import { parseInvoiceJobJson } from "../src/jobs/schema.js";
 import { hashCanonicalJob } from "../src/arca/preparedInvoice.js";
-import { inspectArcaInvoicePdf } from "../src/arca/invoicePdf.js";
+import { assertArcaInvoicePdfMatchesKnownReceipt, buildArcaInvoicePdfExpectation, inspectArcaInvoicePdf } from "../src/arca/invoicePdf.js";
 import { OperationLedger } from "../src/arca/operationLedger.js";
 import { sha256File } from "../src/arca/emission.js";
 import { resolveCredentialRoutingIdentity } from "../src/config/env.js";
@@ -30,23 +30,22 @@ const identity = resolveCredentialRoutingIdentity(loadedJob.issuerKey);
 const job = { ...loadedJob, issuerKey: identity.issuerKey };
 const ledger = new OperationLedger(runtime.ledger);
 const jobHash = hashCanonicalJob(job);
-const current = await ledger.get(job.operationId);
+const current = dryRun
+  ? await ledger.peek(job.operationId)
+  : await ledger.get(job.operationId);
 if (!current || current.status !== "unknown" || current.jobHash !== jobHash) {
   throw new Error(`La recuperación exige que el ledger esté en unknown y asociado al mismo job; estado actual: ${current?.status ?? "inexistente"}.`);
 }
 if (!current.issuer) {
   throw new Error("El ledger unknown no contiene la identidad verificada del emisor necesaria para el archivo canónico.");
 }
+if (current.issuer.cuit.replace(/\D/gu, "") !== job.issuerKey.replace(/\D/gu, "")) {
+  throw new Error("El emisor conservado en el ledger unknown no coincide con el job de recuperación.");
+}
 const stableSource = await stagePrivateRecoveryPdf(sourcePath, job.operationId, runtime.downloads, runtime.root);
 try {
-  const evidence = await inspectArcaInvoicePdf(stableSource.path, {
-    voucherType: job.voucherType,
-    pointOfSale: job.pointOfSale,
-    issueDate: formatDate(job.date),
-    recipientCuit: job.recipientCuit,
-    description: job.description,
-    amountCents: job.amountCents,
-  });
+  const evidence = await inspectArcaInvoicePdf(stableSource.path, buildArcaInvoicePdfExpectation(job));
+  assertArcaInvoicePdfMatchesKnownReceipt(evidence, current.receipt);
   const sourceSha256 = await sha256File(stableSource.path);
   const artifacts = await buildInvoiceArtifactPaths(job, current.issuer, {
     voucherNumber: evidence.voucherNumber,
@@ -89,9 +88,4 @@ try {
   }
 } finally {
   await stableSource.release();
-}
-
-function formatDate(value: string): string {
-  const [year, month, day] = value.split("-");
-  return `${day}/${month}/${year}`;
 }

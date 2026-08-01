@@ -68,6 +68,15 @@ export function resolveWindowsCredential(selector: string): CredentialReference 
   return parseCredentialReference(runWindowsCredentialJson<CredentialReference>("resolve", selector));
 }
 
+export function listWindowsCredentialReferences(): CredentialReference[] {
+  const raw = runWindowsCredentialJson<unknown>("list");
+  if (raw === null) return [];
+  if (!Array.isArray(raw) || raw.length > 10_000) {
+    throw new Error("El almacén devolvió un índice de credenciales inválido.");
+  }
+  return raw.map(parseCredentialReference);
+}
+
 export function saveWindowsCredentialFromJson(payload: { issuerKey: string; displayName?: string; cuit: string; clave: string }): void {
   const normalized = normalizeCredentialWriteInput(payload);
   const script = path.resolve("scripts", "windows-credential.ps1");
@@ -82,10 +91,12 @@ export function saveWindowsCredentialFromJson(payload: { issuerKey: string; disp
   if (result.status !== 0) throw new Error((result.stderr || "No se pudo guardar la credencial.").trim());
 }
 
-function runWindowsCredentialJson<T>(operation: string, selector: string): T {
+function runWindowsCredentialJson<T>(operation: string, selector?: string): T {
   if (process.platform !== "win32") throw new Error("El proveedor windows requiere Windows.");
   const script = path.resolve("scripts", "windows-credential.ps1");
-  const result = spawnSync(windowsPowerShellExecutable(), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, operation, selector], {
+  const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, operation];
+  if (selector !== undefined) args.push(selector);
+  const result = spawnSync(windowsPowerShellExecutable(), args, {
     encoding: "utf8",
     windowsHide: true,
     timeout: credentialProviderTimeoutMs,

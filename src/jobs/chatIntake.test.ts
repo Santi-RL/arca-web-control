@@ -26,6 +26,51 @@ test("normaliza fechas locales, importe argentino, CUIT y vencimiento predetermi
   assert.equal(normalized.dueDate, undefined);
   assert.equal(normalized.saleCondition, "Transferencia bancaria");
   assert.equal(normalized.amount, "123456.78");
+  assert.equal(Object.hasOwn(normalized, "recipientKind"), false);
+});
+
+test("acepta Consumidor Final anónimo sin materializar identidad fiscal", () => {
+  const normalized = normalizeConversationalInvoiceInput({
+    intentId: "00000000-0000-4000-8000-000000000003",
+    issuerSelector: "Emisor Ficticio",
+    recipientKind: "anonymous-final-consumer",
+    recipientVatCondition: "Consumidor Final",
+    pointOfSale: 2,
+    date: "15/06/2030",
+    billingPeriodFrom: "01/06/2030",
+    billingPeriodTo: "30/06/2030",
+    dueDate: "Default",
+    saleCondition: "Transferencia bancaria.",
+    description: "Servicio ficticio para prueba",
+    amount: "100.000,00",
+  });
+  assert.equal(normalized.recipientKind, "anonymous-final-consumer");
+  assert.equal(normalized.recipientVatCondition, "Consumidor Final");
+  assert.equal(Object.hasOwn(normalized, "recipientCuit"), false);
+  assert.equal(Object.hasOwn(normalized, "recipientName"), false);
+  assert.equal(Object.hasOwn(normalized, "recipientCommercialAddress"), false);
+  assert.equal(normalized.amount, "100000.00");
+});
+
+test("rechaza identidad o condición IVA incompatibles con receptor anónimo", () => {
+  const anonymous = {
+    intentId: "00000000-0000-4000-8000-000000000003",
+    issuerSelector: "Emisor Ficticio",
+    recipientKind: "anonymous-final-consumer",
+    recipientVatCondition: "Consumidor Final",
+    pointOfSale: 2,
+    date: "15/06/2030",
+    billingPeriodFrom: "01/06/2030",
+    billingPeriodTo: "30/06/2030",
+    saleCondition: "Transferencia bancaria",
+    description: "Servicio ficticio para prueba",
+    amount: "100000.00",
+  };
+  assert.equal(normalizeConversationalInvoiceInput(anonymous).recipientKind, "anonymous-final-consumer");
+  assert.throws(() => normalizeConversationalInvoiceInput({ ...anonymous, recipientVatCondition: "IVA Responsable Inscripto" }));
+  assert.throws(() => normalizeConversationalInvoiceInput({ ...anonymous, recipientCuit: "20-00000000-1" }));
+  assert.throws(() => normalizeConversationalInvoiceInput({ ...anonymous, recipientName: "RECEPTOR FICTICIO" }));
+  assert.throws(() => normalizeConversationalInvoiceInput({ ...anonymous, recipientCommercialAddress: "DOMICILIO FICTICIO 123" }));
 });
 
 test("rechaza fechas inexistentes e importes ambiguos antes de abrir Chrome", () => {

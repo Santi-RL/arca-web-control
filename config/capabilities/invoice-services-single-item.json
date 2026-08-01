@@ -1,6 +1,6 @@
 {
   "id": "invoice-services-single-item",
-  "version": 13,
+  "version": 14,
   "title": "Factura C de servicios de un ítem",
   "maturity": "automated_to_summary",
   "hiddenAllowed": false,

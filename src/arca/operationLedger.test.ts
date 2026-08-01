@@ -194,6 +194,37 @@ test("una emisión cuyo proceso terminó se normaliza a unknown y nunca vuelve a
   );
 });
 
+test("peek observa una emisión huérfana sin normalizar ni modificar el ledger", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "arca-ledger-"));
+  const operationId = "operation-orphan-emitting-passive";
+  const alive = new Set([32501]);
+  const emitter = new OperationLedger(directory, {
+    pid: 32501,
+    ownerToken: "77777777-7777-4777-8777-777777777777",
+    isProcessAlive: (pid) => alive.has(pid),
+  });
+  const observer = new OperationLedger(directory, {
+    pid: 32502,
+    ownerToken: "88888888-8888-4888-8888-888888888888",
+    isProcessAlive: (pid) => alive.has(pid),
+  });
+
+  await emitter.claimPreparation(operationId, "hash-a", "prepared-a");
+  await emitter.attachPreparedIssuer(operationId, "prepared-a", "hash-a", { cuit: "20000000001", name: "EMISOR FICTICIO" });
+  await emitter.claimEmission(operationId, "prepared-a", "hash-a");
+  alive.delete(32501);
+
+  const digest = createHash("sha256").update(operationId, "utf8").digest("hex");
+  const ledgerPath = path.join(directory, `${digest}.json`);
+  const before = await fs.readFile(ledgerPath);
+  const observed = await observer.peek(operationId);
+  const after = await fs.readFile(ledgerPath);
+
+  assert.equal(observed?.status, "emitting");
+  assert.deepEqual(observed, JSON.parse(before.toString("utf8")));
+  assert.deepEqual(after, before);
+});
+
 test("una emisión demasiado antigua se vuelve unknown aunque su PID haya sido reutilizado", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "arca-ledger-"));
   let clock = new Date("2030-06-15T12:00:00.000Z");

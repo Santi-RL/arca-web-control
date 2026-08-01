@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { loadCapabilityRegistry, parseCapabilityManifest, requireHiddenCapability, requireInvoiceCapability, requireInvoiceJobVisibleRevalidation, requireVisibleInvoiceRevalidationCapability } from "./registry.js";
+import { renderSkillCapabilities } from "./generate.js";
+import { loadCapabilityRegistry, parseCapabilityManifest, requireHiddenCapability, requireInvoiceCapability, requireInvoiceJobCapability, requireInvoiceJobVisibleRevalidation, requireVisibleInvoiceRevalidationCapability } from "./registry.js";
 
 const validHiddenManifest = {
   id: "invoice-hidden-test",
@@ -34,7 +35,29 @@ test("registro carga la capacidad fiscal canónica", async () => {
     concept: "Servicios",
     currency: "ARS",
     itemCount: 1,
+    recipientKind: "identified-cuit",
   });
+});
+
+test("registro separa consumidor final anónimo del receptor identificado y documenta ambos alcances", async () => {
+  const registry = await loadCapabilityRegistry();
+  const anonymous = registry.find((item) => item.id === "invoice-services-single-item-consumidor-final-anonimo");
+  assert.equal(anonymous?.maturity, "automated_to_summary");
+  assert.equal(anonymous?.hiddenAllowed, false);
+  assert.equal(anonymous?.commands.includes("emit-prepared-invoice"), false);
+  assert.equal(anonymous?.confirmation, "EMITIR");
+  assert.deepEqual(anonymous?.runtimeScope, {
+    kind: "invoice",
+    voucherType: "Factura C",
+    concept: "Servicios",
+    currency: "ARS",
+    itemCount: 1,
+    recipientKind: "anonymous-final-consumer",
+  });
+
+  const rendered = renderSkillCapabilities(registry);
+  assert.match(rendered, /receptor `identified-cuit`/);
+  assert.match(rendered, /receptor `anonymous-final-consumer`/);
 });
 
 test("production-hidden permanece deshabilitado sin fast_path aprobado", async () => {
@@ -91,6 +114,17 @@ test("el alcance canónico admite preparar Factura C de Servicios y bloquea emis
     itemCount: 1,
   });
   assert.equal(capability.id, "invoice-services-single-item");
+  assert.equal((await requireInvoiceJobCapability({
+    voucherType: "Factura C",
+    concept: "Servicios",
+    currency: "ARS",
+  }, "prepare-invoice")).id, "invoice-services-single-item");
+  assert.equal((await requireInvoiceJobCapability({
+    voucherType: "Factura C",
+    concept: "Servicios",
+    currency: "ARS",
+    recipientKind: "anonymous-final-consumer",
+  }, "prepare-invoice")).id, "invoice-services-single-item-consumidor-final-anonimo");
   await assert.rejects(() => requireInvoiceCapability({
     command: "emit-prepared-invoice",
     voucherType: "Factura C",
@@ -100,7 +134,7 @@ test("el alcance canónico admite preparar Factura C de Servicios y bloquea emis
   }), /no coincide con una capacidad registrada/i);
 });
 
-test("la revalidación visible admite únicamente el manifiesto pendiente sin promoverlo", async () => {
+test("la revalidación visible admite únicamente el manifiesto pendiente y no reabre uno ya validado", async () => {
   const capability = await requireVisibleInvoiceRevalidationCapability("invoice-services-single-item");
   assert.equal(capability.maturity, "automated_to_summary");
   assert.equal(capability.hiddenAllowed, false);
@@ -110,6 +144,37 @@ test("la revalidación visible admite únicamente el manifiesto pendiente sin pr
     concept: "Servicios",
     currency: "ARS",
   }, capability.id)).id, capability.id);
+  await assert.rejects(
+    () => requireVisibleInvoiceRevalidationCapability("invoice-services-single-item-consumidor-final-anonimo"),
+    /estado canónico/i,
+  );
+  await assert.rejects(() => requireInvoiceJobVisibleRevalidation({
+    voucherType: "Factura C",
+    concept: "Servicios",
+    currency: "ARS",
+    recipientKind: "anonymous-final-consumer",
+  }, "invoice-services-single-item-consumidor-final-anonimo"), /estado canónico/i);
+  await assert.rejects(() => requireInvoiceJobVisibleRevalidation({
+    voucherType: "Factura C",
+    concept: "Servicios",
+    currency: "ARS",
+    recipientKind: "anonymous-final-consumer",
+  }, capability.id), /alcance cerrado/i);
+});
+
+test("el alcance runtime rechaza tipos de receptor desconocidos en manifiestos y solicitudes", async () => {
+  assert.throws(() => parseCapabilityManifest({
+    ...validHiddenManifest,
+    runtimeScope: { ...validHiddenManifest.runtimeScope, recipientKind: "persona-sin-identidad" },
+  }), /recipientKind/i);
+  await assert.rejects(() => requireInvoiceCapability({
+    command: "prepare-invoice",
+    voucherType: "Factura C",
+    concept: "Servicios",
+    currency: "ARS",
+    itemCount: 1,
+    recipientKind: "persona-sin-identidad" as "identified-cuit",
+  }), /tipo de receptor no admitido/i);
 });
 
 test("la revalidación visible rechaza variantes y manifiestos ya promovidos", async (t) => {

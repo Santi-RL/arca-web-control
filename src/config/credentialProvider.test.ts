@@ -8,6 +8,7 @@ import {
   credentialProviderFingerprint,
   loadConfiguredCredential,
   loadCredentialProviderSelection,
+  lookupConfiguredCredentialIdentity,
   resolveConfiguredCredential,
   saveCredentialProviderSelection,
 } from "./credentialProvider.js";
@@ -35,6 +36,19 @@ test("json-file se configura fuera de Git y resuelve por CUIT o nombre unívoco"
   assert.equal(resolveConfiguredCredential(runtime, "Emisor Ficticio").cuit, "20000000001");
   assert.equal(resolveConfiguredCredential(runtime, "20-00000000-1").cuit, "20000000001");
   assert.equal(loadConfiguredCredential(runtime, "20000000001").clave, sentinel);
+
+  const suggested = lookupConfiguredCredentialIdentity(runtime, "Emisor Ficticioo");
+  assert.equal(suggested.status, "needs_confirmation");
+  assert.deepEqual(suggested.status === "needs_confirmation"
+    ? suggested.candidates.map(({ cuit, displayName }) => ({ cuit, displayName }))
+    : [], [{ cuit: "20000000001", displayName: "Emisor Ficticio" }]);
+  assert.doesNotMatch(JSON.stringify(suggested), new RegExp(sentinel));
+  assert.throws(() => resolveConfiguredCredential(runtime, "Emisor Ficticioo"), (error: Error) => {
+    assert.match(error.message, /ARCA_CREDENTIAL_CONFIRMATION_REQUIRED/);
+    assert.match(error.message, /Emisor Ficticio \[20-00000000-1\]/);
+    assert.doesNotMatch(error.message, new RegExp(sentinel));
+    return true;
+  });
 });
 
 test("json-file detiene nombres ambiguos y nunca incluye claves en el error", async (context) => {
@@ -167,4 +181,17 @@ test("la huella y el índice bloquean cambios del archivo posteriores a su selec
   assert.throws(() => credentialProviderFingerprint(runtime), /cambió desde que fue seleccionado/i);
   assert.throws(() => resolveConfiguredCredential(runtime, "Emisor Estable"), /cambió desde que fue seleccionado/i);
   assert.match(before, /^[a-f0-9]{64}$/u);
+});
+
+test("la carga atestiguada valida la huella antes y después de materializar la clave", async () => {
+  const source = await fs.readFile(path.resolve("src", "config", "credentialProvider.ts"), "utf8");
+  for (const functionName of ["loadConfiguredCredential", "loadConfiguredCredentialAsync"]) {
+    const start = source.indexOf(`export ${functionName === "loadConfiguredCredentialAsync" ? "async " : ""}function ${functionName}`);
+    const end = source.indexOf("\nexport ", start + 1);
+    const body = source.slice(start, end >= 0 ? end : undefined);
+    const beforeRead = body.indexOf("assertLoadedProviderFingerprint(selection, expectedFingerprint, expectedIdentity)");
+    const readSecret = body.indexOf("loadJsonCredential(selection.file, selector, expectedIdentity)");
+    const afterRead = body.indexOf("assertProviderStillMatches(runtime, expectedFingerprint)", readSecret);
+    assert.ok(start >= 0 && beforeRead >= 0 && readSecret > beforeRead && afterRead > readSecret);
+  }
 });

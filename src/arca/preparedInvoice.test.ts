@@ -38,6 +38,7 @@ const summary: PreparedInvoiceSummary = {
   billingPeriodFrom: "01/06/2030",
   billingPeriodTo: "30/06/2030",
   dueDate: "10/07/2030",
+  recipientKind: "identified-cuit",
   recipientCuit: "20000000001",
   saleCondition: "Otra",
   description: "Prueba",

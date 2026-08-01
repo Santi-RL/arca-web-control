@@ -6,11 +6,16 @@ import type { ArcaCredentials } from "../types.js";
 import { isValidCuit } from "../jobs/schema.js";
 import { writeJsonAtomic } from "../io/atomicJson.js";
 import {
+  listWindowsCredentialReferences,
   loadWindowsCredential,
   loadWindowsCredentialAsync,
-  resolveWindowsCredential,
   type CredentialReference,
 } from "./credentials.js";
+import {
+  formatCredentialCuit,
+  lookupCredentialIdentity,
+  type CredentialIdentityLookup,
+} from "./credentialIdentity.js";
 import { ensurePrivateFile, type RuntimePaths } from "./runtimePaths.js";
 
 export type CredentialProviderSelection =
@@ -28,6 +33,7 @@ export type CredentialProviderSelection =
 export type CredentialProviderErrorCode =
   | "ARCA_CREDENTIAL_NOT_FOUND"
   | "ARCA_CREDENTIAL_AMBIGUOUS"
+  | "ARCA_CREDENTIAL_CONFIRMATION_REQUIRED"
   | "ARCA_CREDENTIAL_PROVIDER_UNAVAILABLE";
 
 export class CredentialProviderError extends Error {
@@ -133,30 +139,67 @@ export async function saveCredentialProviderSelection(runtime: RuntimePaths, raw
 }
 
 export function resolveConfiguredCredential(runtime: RuntimePaths, selector: string): CredentialReference {
+  const lookup = lookupConfiguredCredentialIdentity(runtime, selector);
+  if (lookup.status === "resolved") return lookup.identity;
+  if (lookup.status === "invalid_cuit") {
+    throw new CredentialProviderError("ARCA_CREDENTIAL_NOT_FOUND", "El selector numérico no contiene un CUIT válido.");
+  }
+  if (lookup.status === "ambiguous") {
+    throw new CredentialProviderError(
+      "ARCA_CREDENTIAL_AMBIGUOUS",
+      `El nombre coincide con más de un contribuyente. Opciones: ${describeCredentialCandidates(lookup.candidates)}. Indicá el CUIT.`,
+    );
+  }
+  if (lookup.status === "needs_confirmation") {
+    throw new CredentialProviderError(
+      "ARCA_CREDENTIAL_CONFIRMATION_REQUIRED",
+      `No hubo una coincidencia exacta. Posibles emisores: ${describeCredentialCandidates(lookup.candidates)}. Confirmá el correcto o indicá el CUIT.`,
+    );
+  }
+  throw new CredentialProviderError("ARCA_CREDENTIAL_NOT_FOUND", "No existe una credencial para el emisor indicado.");
+}
+
+export function lookupConfiguredCredentialIdentity(runtime: RuntimePaths, selector: string): CredentialIdentityLookup {
+  return lookupCredentialIdentity(listConfiguredCredentialIdentities(runtime), selector);
+}
+
+export function listConfiguredCredentialIdentities(runtime: RuntimePaths): CredentialReference[] {
   const selection = loadCredentialProviderSelection(runtime);
   if (selection.provider === "windows") {
     try {
-      return resolveWindowsCredential(selector);
+      return listWindowsCredentialReferences();
     } catch (error) {
       throw classifyWindowsProviderFailure(error, "resolve");
     }
   }
-  return resolveJsonCredential(selection, selector);
+  if (!selection.identities) {
+    throw providerUnavailable("La selección temporal json-file no expone un índice no secreto; indicá el emisor por CUIT o guardá primero el proveedor.");
+  }
+  return selection.identities.map((identity) => ({
+    issuerKey: identity.cuit,
+    cuit: identity.cuit,
+    displayName: identity.displayName,
+    storageVersion: 1,
+  }));
 }
 
 export function loadConfiguredCredential(runtime: RuntimePaths, selector: string, expectedFingerprint?: string): ArcaCredentials {
   const selection = loadCredentialProviderSelection(runtime);
   if (selection.provider === "windows") {
     assertLoadedProviderFingerprint(selection, expectedFingerprint);
+    let credential: ArcaCredentials;
     try {
-      return loadWindowsCredential(selector);
+      credential = loadWindowsCredential(selector);
     } catch (error) {
       throw classifyWindowsProviderFailure(error, "load");
     }
+    assertProviderStillMatches(runtime, expectedFingerprint);
+    return credential;
   }
   const expectedIdentity = selection.fileIdentity ?? externalFileIdentity(selection.file);
-  const credential = loadJsonCredential(selection.file, selector, expectedIdentity);
   assertLoadedProviderFingerprint(selection, expectedFingerprint, expectedIdentity);
+  const credential = loadJsonCredential(selection.file, selector, expectedIdentity);
+  assertProviderStillMatches(runtime, expectedFingerprint);
   return credential;
 }
 
@@ -164,15 +207,19 @@ export async function loadConfiguredCredentialAsync(runtime: RuntimePaths, selec
   const selection = loadCredentialProviderSelection(runtime);
   if (selection.provider === "windows") {
     assertLoadedProviderFingerprint(selection, expectedFingerprint);
+    let credential: ArcaCredentials;
     try {
-      return await loadWindowsCredentialAsync(selector);
+      credential = await loadWindowsCredentialAsync(selector);
     } catch (error) {
       throw classifyWindowsProviderFailure(error, "load");
     }
+    assertProviderStillMatches(runtime, expectedFingerprint);
+    return credential;
   }
   const expectedIdentity = selection.fileIdentity ?? externalFileIdentity(selection.file);
-  const credential = loadJsonCredential(selection.file, selector, expectedIdentity);
   assertLoadedProviderFingerprint(selection, expectedFingerprint, expectedIdentity);
+  const credential = loadJsonCredential(selection.file, selector, expectedIdentity);
+  assertProviderStillMatches(runtime, expectedFingerprint);
   return credential;
 }
 
@@ -309,14 +356,6 @@ function readJsonCredentials(filePath: string, expectedIdentity: string): Array<
   }
 }
 
-function resolveJsonCredential(selection: Extract<CredentialProviderSelection, { provider: "json-file" }>, selector: string): CredentialReference {
-  if (!selection.identities) {
-    throw providerUnavailable("La selección temporal json-file requiere indicar el emisor por CUIT o guardar primero el proveedor.");
-  }
-  const record = selectJsonIdentity(selection.identities, selector);
-  return { issuerKey: record.cuit, cuit: record.cuit, displayName: record.displayName, storageVersion: 1 };
-}
-
 function selectJsonIdentity<T extends { cuit: string; displayName: string }>(records: T[], selector: string): T {
   const numeric = /^\s*[\d.\-\s]+\s*$/u.test(selector) ? selector.replace(/\D/g, "") : undefined;
   if (numeric && !isValidCuit(numeric)) {
@@ -356,6 +395,13 @@ function providerUnavailable(message: string): CredentialProviderError {
   return new CredentialProviderError("ARCA_CREDENTIAL_PROVIDER_UNAVAILABLE", message);
 }
 
+function describeCredentialCandidates(candidates: Array<Pick<CredentialReference, "displayName" | "cuit">>): string {
+  return candidates
+    .slice(0, 20)
+    .map((candidate) => `${candidate.displayName} [${formatCredentialCuit(candidate.cuit)}]`)
+    .join(", ");
+}
+
 function assertLoadedProviderFingerprint(
   selection: CredentialProviderSelection,
   expectedFingerprint: string | undefined,
@@ -365,6 +411,10 @@ function assertLoadedProviderFingerprint(
   if (!/^[a-f0-9]{64}$/u.test(expectedFingerprint) || fingerprintSelection(selection, openedFileIdentity) !== expectedFingerprint) {
     throw providerUnavailable("El proveedor o el descriptor de credenciales no coincide con la atestación del inicio de sesión.");
   }
+}
+
+function assertProviderStillMatches(runtime: RuntimePaths, expectedFingerprint: string | undefined): void {
+  if (expectedFingerprint) assertCredentialProviderFingerprint(runtime, expectedFingerprint);
 }
 
 function fingerprintSelection(selection: CredentialProviderSelection, openedFileIdentity?: string): string {

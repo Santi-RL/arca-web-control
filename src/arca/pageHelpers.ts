@@ -214,23 +214,160 @@ export async function selectOptionLike(page: Page, label: string, value: string,
 }
 
 export async function selectOptionContaining(locator: Locator, value: string): Promise<void> {
+  const options = await readSelectOptions(locator);
+  const selected = exactUniqueEnabledOption(options, value);
+  await locator.selectOption({ index: selected.index });
+  await assertSelectedOptionContaining(locator, value);
+}
+
+export async function assertSelectedOptionContaining(locator: Locator, value: string): Promise<string> {
+  const options = await readSelectOptionsAfterPotentialNavigation(locator);
+  const expected = exactUniqueEnabledOption(options, value);
+  const selected = options.filter((option) => option.selected);
+  if (selected.length !== 1 || selected[0]?.index !== expected.index) {
+    throw new Error(`La opción exacta, única y habilitada "${value}" no quedó seleccionada de forma verificable.`);
+  }
+  return expected.text;
+}
+
+type VisibleTextSelectOption = {
+  text: string;
+  disabled: boolean;
+  selected: boolean;
+};
+
+/**
+ * Espera en modo de solo lectura una opción exacta, única, habilitada y ya
+ * seleccionada por ARCA. No lee su value técnico ni dispara eventos change.
+ */
+export async function waitForUniqueSelectedEnabledOptionByVisibleText<const T extends string>(
+  locator: Locator,
+  expectedText: T,
+  description: string,
+  timeoutMs = 5000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let observedExpectedOption = false;
+
+  while (Date.now() < deadline) {
+    const options = await readVisibleTextSelectOptionsAfterPotentialNavigation(locator);
+    const blankOptions = options.filter((option) => option.text === "");
+    if (blankOptions.length > 0) {
+      throw new Error(`${description}: ARCA mostró una opción de texto vacío; es una variante no aprendida y el flujo fue bloqueado.`);
+    }
+    const expectedOptions = options.filter((option) => option.text === expectedText);
+    if (expectedOptions.length > 1) {
+      throw new Error(`${description}: ARCA mostró ${expectedOptions.length} opciones "${expectedText}"; se exige exactamente una.`);
+    }
+    if (expectedOptions.length === 1) {
+      observedExpectedOption = true;
+      const expectedOption = expectedOptions[0] as VisibleTextSelectOption;
+      if (expectedOption.disabled) {
+        throw new Error(`${description}: la única opción "${expectedText}" está deshabilitada.`);
+      }
+      if (await locator.isDisabled().catch(() => true)) {
+        throw new Error(`${description}: el selector de documento está deshabilitado.`);
+      }
+      const selectedOptions = options.filter((option) => option.selected);
+      if (expectedOption.selected && selectedOptions.length > 1) {
+        throw new Error(`${description}: ARCA mostró más de una opción seleccionada; el flujo fue bloqueado.`);
+      }
+      if (expectedOption.selected && selectedOptions.length === 1) {
+        return expectedText;
+      }
+    }
+
+    await locator.page().waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
+  }
+
+  if (!observedExpectedOption) {
+    throw new Error(`${description}: ARCA no mostró una opción única "${expectedText}" dentro del tiempo esperado.`);
+  }
+  throw new Error(`${description}: la opción única "${expectedText}" no quedó preseleccionada por ARCA.`);
+}
+
+async function readVisibleTextSelectOptionsAfterPotentialNavigation(locator: Locator, timeoutMs = 3000): Promise<VisibleTextSelectOption[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      return await readVisibleTextSelectOptions(locator);
+    } catch (error) {
+      if (Date.now() >= deadline || !isTransientNavigationReadError(error)) throw error;
+      await locator.page().waitForTimeout(Math.min(25, Math.max(1, deadline - Date.now())));
+    }
+  }
+}
+
+async function readVisibleTextSelectOptions(locator: Locator): Promise<VisibleTextSelectOption[]> {
+  return await locator.locator("option").evaluateAll((elements) => elements.map((element) => {
+    const option = element as HTMLOptionElement;
+    const parentDisabled = option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled;
+    return {
+      text: (option.textContent ?? "").trim(),
+      disabled: option.disabled || parentDisabled,
+      selected: option.selected,
+    };
+  }));
+}
+
+async function readSelectOptionsAfterPotentialNavigation(locator: Locator, timeoutMs = 3000): Promise<ExactSelectOption[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      return await readSelectOptions(locator);
+    } catch (error) {
+      if (Date.now() >= deadline || !isTransientNavigationReadError(error)) throw error;
+      await locator.page().waitForTimeout(Math.min(25, Math.max(1, deadline - Date.now())));
+    }
+  }
+}
+
+function isTransientNavigationReadError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /execution context was destroyed|cannot find context|most likely because of a navigation|frame was detached/i.test(message);
+}
+
+type ExactSelectOption = {
+  index: number;
+  text: string;
+  value: string | null;
+  disabled: boolean;
+  selected: boolean;
+};
+
+async function readSelectOptions(locator: Locator): Promise<ExactSelectOption[]> {
+  return await locator.locator("option").evaluateAll((elements) => elements.map((element, index) => {
+    const option = element as HTMLOptionElement;
+    const parentDisabled = option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled;
+    return {
+      index,
+      text: (option.textContent ?? "").trim(),
+      value: option.getAttribute("value"),
+      disabled: option.disabled || parentDisabled,
+      selected: option.selected,
+    };
+  }));
+}
+
+function exactUniqueEnabledOption(options: ExactSelectOption[], value: string): ExactSelectOption {
   const normalizedValue = normalizeForMatch(value);
-  const options = await locator.locator("option").evaluateAll((elements) => elements.map((element) => ({
-    text: (element.textContent ?? "").trim(),
-    value: element.getAttribute("value"),
-  })));
-  const candidates = options.filter((option) => {
-    const text = normalizeForMatch(option.text);
-    const optionValue = normalizeForMatch(option.value ?? "");
-    const numericPrefix = /^\d+$/.test(normalizedValue) && new RegExp("^" + normalizedValue + "(?:\\D|$)").test(text.replace(/\s+/g, ""));
-    return text === normalizedValue || optionValue === normalizedValue || numericPrefix;
-  });
+  const candidates = options.filter((option) => optionMatchesExactValue(option, normalizedValue));
   if (candidates.length !== 1) {
     const found = candidates.length ? candidates.map((item) => item.text || item.value).join(" | ") : "ninguna";
-    throw new Error("Se esperaba una opción exacta y única para \"" + value + "\". Coincidencias: " + found + ". Opciones: " + options.map((item) => item.text || item.value).join(" | "));
+    throw new Error("Se esperaba una opción exacta y única, además de habilitada, para \"" + value + "\". Coincidencias: " + found + ". Opciones: " + options.map((item) => item.text || item.value).join(" | "));
   }
-  const selected = candidates[0];
-  await locator.selectOption(selected?.value ? { value: selected.value } : { label: selected?.text ?? "" });
+  const candidate = candidates[0] as ExactSelectOption;
+  if (candidate.disabled) {
+    throw new Error(`La opción exacta y única para "${value}" está deshabilitada; se exige una opción habilitada.`);
+  }
+  return candidate;
+}
+
+function optionMatchesExactValue(option: Pick<ExactSelectOption, "text" | "value">, normalizedValue: string): boolean {
+  const text = normalizeForMatch(option.text);
+  const optionValue = normalizeForMatch(option.value ?? "");
+  const numericPrefix = /^\d+$/.test(normalizedValue) && new RegExp("^" + normalizedValue + "(?:\\D|$)").test(text.replace(/\s+/g, ""));
+  return text === normalizedValue || optionValue === normalizedValue || numericPrefix;
 }
 
 function normalizeForMatch(value: string): string {

@@ -25,7 +25,7 @@ import { getRuntimePaths } from "../config/runtimePaths.js";
 import { readPrivateInvoiceJobFile } from "../config/privateJobs.js";
 import { resolveCredentialRoutingIdentity } from "../config/env.js";
 import { measureArcaPerformance, startArcaPerformance } from "./performance.js";
-import { downloadGeneratedInvoicePdf, inspectArcaInvoicePdf, type ArcaInvoicePdfEvidence } from "./invoicePdf.js";
+import { buildArcaInvoicePdfExpectation, downloadGeneratedInvoicePdf, inspectArcaInvoicePdf, type ArcaInvoicePdfEvidence } from "./invoicePdf.js";
 import { sanitizeErrorMessage } from "./publicErrors.js";
 import { requireHiddenCapability, requireInvoiceJobCapability, requireInvoiceJobVisibleRevalidation, requireVisibleInvoiceRevalidationCapability } from "../capabilities/registry.js";
 import {
@@ -630,15 +630,8 @@ export class ArcaLiveSession {
       });
       const screenshotPath = await this.screenshot();
       const stagingPdfPath = await this.savePrintPdf(pdfReservation.path, runtime.downloads, runtime.root, pdfReservation);
-      const pdfEvidence = await inspectArcaInvoicePdf(stagingPdfPath, {
-        voucherType: state.job.voucherType,
-        pointOfSale: state.job.pointOfSale,
-        issueDate: formatDateForArca(state.job.date),
-        recipientCuit: state.job.recipientCuit,
-        description: state.job.description,
-        amountCents: state.job.amountCents,
-      });
       const confirmationToPdfMs = onPdfObtained?.();
+      const pdfEvidence = await inspectArcaInvoicePdf(stagingPdfPath, buildArcaInvoicePdfExpectation(state.job));
       const pdfSha256 = await sha256File(stagingPdfPath);
       assertEmissionResultMatchesPdf(result, pdfEvidence);
       const voucherNumber = pdfEvidence.voucherNumber;
@@ -1020,15 +1013,35 @@ export function buildPreparedInvoiceSummary(
     [identity.sessionIssuerKey, job.issuerKey, identity.credentialCuit],
   );
   const currency = requireVerifiedCurrency(job, evidence);
-  if (!evidence.recipientCuit || !evidence.recipientName) {
-    throw new Error("No existe evidencia visible completa de la identidad del receptor.");
+  const recipientKind = job.recipientKind === "anonymous-final-consumer"
+    ? "anonymous-final-consumer"
+    : "identified-cuit";
+  if (evidence.recipientEmailBlank !== true || evidence.recipientAssociatedVoucherAbsent !== true) {
+    throw new Error("No existe evidencia visible positiva de Email vacío y Comprobantes Asociados ausentes.");
   }
-  if (!recipientCuitsMatch(evidence.recipientCuit, job.recipientCuit)
-    || (job.recipientName && !recipientIdentityMatches(
-      { cuit: evidence.recipientCuit, name: evidence.recipientName },
-      { cuit: job.recipientCuit, name: job.recipientName },
-    ))) {
-    throw new Error("La identidad visible del receptor no coincide de forma segura con el job.");
+  if (recipientKind === "anonymous-final-consumer") {
+    if (evidence.recipientKind !== "anonymous-final-consumer"
+      || evidence.recipientDocumentTypeDefault !== "CUIT"
+      || evidence.recipientDocumentNumberBlank !== true
+      || evidence.recipientNameBlank !== true
+      || evidence.recipientCommercialAddressBlank !== true
+      || evidence.recipientCuit
+      || evidence.recipientName
+      || evidence.recipientCommercialAddress
+      || !sameSummaryText(evidence.recipientVatCondition, "Consumidor Final")) {
+      throw new Error("No existe evidencia visible positiva y completa del receptor Consumidor Final sin identificar.");
+    }
+  } else {
+    if (evidence.recipientKind !== "identified-cuit" || !evidence.recipientCuit || !evidence.recipientName) {
+      throw new Error("No existe evidencia visible completa de la identidad del receptor.");
+    }
+    if (!recipientCuitsMatch(evidence.recipientCuit, job.recipientCuit)
+      || (job.recipientName && !recipientIdentityMatches(
+        { cuit: evidence.recipientCuit, name: evidence.recipientName },
+        { cuit: job.recipientCuit, name: job.recipientName },
+      ))) {
+      throw new Error("La identidad visible del receptor no coincide de forma segura con el job.");
+    }
   }
   if (!evidence.quantity || !evidence.unitPrice || !evidence.subtotal || !evidence.total) {
     throw new Error("No existe evidencia visible completa de cantidad, precio unitario, subtotal y total.");
@@ -1040,6 +1053,9 @@ export function buildPreparedInvoiceSummary(
     throw new Error("La evidencia visible de cantidad, precio unitario, subtotal o total no coincide con el job.");
   }
   const missingExpectedSignals = missingExpectedSummarySignals(bodyText, job, evidence);
+  const absentOptionalSummaryEvidence = parseAbsentOptionalRecipientSummaryEvidence(
+    extractUniqueRecipientSummaryBlock(bodyText) ?? "",
+  );
 
   return {
     issueDate: evidence.issueDate ?? "",
@@ -1054,10 +1070,19 @@ export function buildPreparedInvoiceSummary(
     billingPeriodFrom: evidence.billingPeriodFrom,
     billingPeriodTo: evidence.billingPeriodTo,
     dueDate: evidence.dueDate,
-    recipientCuit: evidence.recipientCuit ?? "",
-    recipientName: evidence.recipientName,
+    recipientKind,
+    ...(recipientKind === "identified-cuit" ? {
+      recipientCuit: evidence.recipientCuit,
+      recipientName: evidence.recipientName,
+      recipientCommercialAddress: evidence.recipientCommercialAddress,
+    } : {}),
     recipientVatCondition: evidence.recipientVatCondition,
-    recipientCommercialAddress: evidence.recipientCommercialAddress,
+    ...(evidence.recipientEmailBlank === true && absentOptionalSummaryEvidence.recipientEmailBlank
+      ? { recipientEmailBlank: true as const }
+      : {}),
+    ...(evidence.recipientAssociatedVoucherAbsent === true && absentOptionalSummaryEvidence.recipientAssociatedVoucherAbsent
+      ? { recipientAssociatedVoucherAbsent: true as const }
+      : {}),
     saleCondition: job.saleCondition,
     description: evidence.description ?? job.description,
     quantity: evidence.quantity ?? "",
@@ -1086,10 +1111,7 @@ export function validatePreparedSummary(summary: PreparedInvoiceSummary, job: Re
     ["período desde", summary.billingPeriodFrom],
     ["período hasta", summary.billingPeriodTo],
     ["vencimiento", summary.dueDate],
-    ["CUIT del receptor", summary.recipientCuit],
-    ["razón social del receptor", summary.recipientName],
     ["condición frente al IVA", summary.recipientVatCondition],
-    ["domicilio comercial del receptor", summary.recipientCommercialAddress],
     ["descripción", summary.description],
     ["cantidad", summary.quantity],
     ["precio unitario", summary.unitPrice],
@@ -1101,6 +1123,8 @@ export function validatePreparedSummary(summary: PreparedInvoiceSummary, job: Re
     throw new Error(`La preparación no conserva evidencia visible de: ${missingControlEvidence.join(", ")}.`);
   }
   const mismatched: string[] = [];
+  if (summary.recipientEmailBlank !== true) mismatched.push("email ausente del receptor");
+  if (summary.recipientAssociatedVoucherAbsent !== true) mismatched.push("comprobantes asociados ausentes");
   if (!sameSummaryText(summary.issueDate, formatDateForArca(job.date))) mismatched.push("fecha de emisión");
   if (!sameSummaryText(summary.voucherType, job.voucherType)) mismatched.push("tipo de comprobante");
   if (canonicalPointOfSaleForSummary(summary.pointOfSale) !== canonicalPointOfSaleForSummary(job.pointOfSale)) mismatched.push("punto de venta");
@@ -1108,14 +1132,31 @@ export function validatePreparedSummary(summary: PreparedInvoiceSummary, job: Re
   if (!sameSummaryText(summary.billingPeriodFrom, job.billingPeriodFrom ? formatDateForArca(job.billingPeriodFrom) : undefined)) mismatched.push("período desde");
   if (!sameSummaryText(summary.billingPeriodTo, job.billingPeriodTo ? formatDateForArca(job.billingPeriodTo) : undefined)) mismatched.push("período hasta");
   if (!sameSummaryText(summary.dueDate, job.dueDate ? formatDateForArca(job.dueDate) : undefined)) mismatched.push("vencimiento");
-  const recipientCuitMatches = recipientCuitsMatch(summary.recipientCuit, job.recipientCuit);
-  if (!recipientCuitMatches) mismatched.push("CUIT receptor");
-  if (recipientCuitMatches && job.recipientName && !recipientIdentityMatches(
-    { cuit: summary.recipientCuit, name: summary.recipientName },
-    { cuit: job.recipientCuit, name: job.recipientName },
-  )) mismatched.push("razón social del receptor");
+  if (job.recipientKind === "anonymous-final-consumer") {
+    if (summary.recipientKind !== "anonymous-final-consumer") mismatched.push("tipo de receptor");
+    if (summary.recipientCuit?.trim() || summary.recipientName?.trim() || summary.recipientCommercialAddress?.trim()) {
+      mismatched.push("identificación ausente del receptor");
+    }
+  } else {
+    if (summary.recipientKind !== "identified-cuit") mismatched.push("tipo de receptor");
+    const requiredRecipientEvidence = [
+      ["CUIT del receptor", summary.recipientCuit],
+      ["razón social del receptor", summary.recipientName],
+      ["domicilio comercial del receptor", summary.recipientCommercialAddress],
+    ] as const;
+    const missingRecipientEvidence = requiredRecipientEvidence.filter(([, value]) => !value?.trim()).map(([label]) => label);
+    if (missingRecipientEvidence.length > 0) {
+      throw new Error(`La preparación no conserva evidencia visible de: ${missingRecipientEvidence.join(", ")}.`);
+    }
+    const recipientCuitMatches = recipientCuitsMatch(summary.recipientCuit, job.recipientCuit);
+    if (!recipientCuitMatches) mismatched.push("CUIT receptor");
+    if (recipientCuitMatches && job.recipientName && !recipientIdentityMatches(
+      { cuit: summary.recipientCuit, name: summary.recipientName },
+      { cuit: job.recipientCuit, name: job.recipientName },
+    )) mismatched.push("razón social del receptor");
+    if (job.recipientCommercialAddress && !commercialAddressesMatch(summary.recipientCommercialAddress ?? "", job.recipientCommercialAddress)) mismatched.push("domicilio comercial");
+  }
   if (!sameSummaryText(summary.recipientVatCondition, job.recipientVatCondition)) mismatched.push("condición frente al IVA");
-  if (job.recipientCommercialAddress && !commercialAddressesMatch(summary.recipientCommercialAddress ?? "", job.recipientCommercialAddress)) mismatched.push("domicilio comercial");
   if (!saleConditionMatches(summary.saleCondition, job.saleCondition)) mismatched.push("condición de venta");
   if (!sameSummaryText(summary.description, job.description)) mismatched.push("descripción");
   if (!/^1(?:[.,]0+)?$/u.test(summary.quantity.trim())) mismatched.push("cantidad");
@@ -1140,11 +1181,9 @@ type ExpectedSummarySignal = string | string[];
 export function missingExpectedSummarySignals(
   bodyText: string,
   job: ResolvedInvoiceJob,
-  evidence: Pick<InvoiceControlEvidence, "recipientCuit" | "recipientName" | "recipientCommercialAddress" | "recipientVatCondition" | "description"> = {},
+  evidence: Pick<InvoiceControlEvidence, "recipientKind" | "recipientCuit" | "recipientName" | "recipientCommercialAddress" | "recipientVatCondition" | "description"> = {},
 ): string[] {
   const missing: string[] = [];
-  const expectedRecipientCuit = evidence.recipientCuit ?? job.recipientCuit;
-  const expectedRecipientName = evidence.recipientName ?? job.recipientName;
   const expectedVat = evidence.recipientVatCondition ?? job.recipientVatCondition;
   const expectedDescription = evidence.description ?? job.description;
   const voucherType = extractSummaryVoucherType(bodyText);
@@ -1152,14 +1191,13 @@ export function missingExpectedSummarySignals(
   const concept = extractAfter(bodyText, /(?:^|\n)\s*Conceptos? a Inclu[ií]r\s+([^\r\n]+)/im);
   const period = bodyText.match(/(?:^|\n)\s*Per[ií]odo Facturado\s+desde:\s*(\d{2}\/\d{2}\/\d{4})\s+hasta:\s*(\d{2}\/\d{2}\/\d{4})/im);
   const dueDate = extractAfter(bodyText, /(?:^|\n)\s*Vto\.?(?:\s+para el Pago)?\s+([0-9]{2}\/[0-9]{2}\/[0-9]{4})\s*(?:\r?\n|$)/im);
-  const recipientHeadingCount = [...bodyText.matchAll(/(?:^|\n)\s*Datos del Receptor\s*(?:\r?\n|$)/gim)].length;
-  const recipientBlock = recipientHeadingCount === 1
-    ? extractSummarySection(bodyText, /Datos del Receptor/i, /Detalle de la Operaci[oó]n/i)
-    : "";
-  const recipientCuit = extractUniqueAfter(recipientBlock, /(?:^|\n)\s*CUIT\s+([^\r\n]+)\s*(?:\r?\n|$)/im);
-  const recipientName = extractUniqueAfter(recipientBlock, /(?:^|\n)\s*Raz[oó]n Social\s+([^\r\n]+)/im);
-  const recipientVat = extractAfter(recipientBlock, /(?:^|\n)\s*Condici[oó]n frente al IVA\s+([^\r\n]+)/im);
-  const saleCondition = extractAfter(recipientBlock, /(?:^|\n)\s*Condiciones? de Venta\s+([^\r\n]+)/im);
+  const recipientBlock = extractUniqueRecipientSummaryBlock(bodyText) ?? "";
+  const recipientCuit = extractSummaryLabeledRows(recipientBlock, "CUIT");
+  const recipientName = extractSummaryLabeledRows(recipientBlock, "Raz[oó]n Social");
+  const recipientAddress = extractSummaryLabeledRows(recipientBlock, "Domicilio Comercial");
+  const absentOptionalSummaryEvidence = parseAbsentOptionalRecipientSummaryEvidence(recipientBlock);
+  const recipientVat = extractSummaryLabeledRows(recipientBlock, "Condici[oó]n frente al IVA");
+  const saleCondition = extractSummaryLabeledRows(recipientBlock, "Condiciones? de Venta");
   const detailBlock = extractSummarySection(bodyText, /Detalle de la Operaci[oó]n/i);
   const total = extractAfter(detailBlock, /(?:^|\n)\s*Importe Total:\s*\$?\s*([0-9.,]+)\s*(?:\r?\n|$)/im);
 
@@ -1169,28 +1207,76 @@ export function missingExpectedSummarySignals(
   if (job.billingPeriodFrom && !sameSummaryText(period?.[1], formatDateForArca(job.billingPeriodFrom))) missing.push(`Período desde: ${formatDateForArca(job.billingPeriodFrom)}`);
   if (job.billingPeriodTo && !sameSummaryText(period?.[2], formatDateForArca(job.billingPeriodTo))) missing.push(`Período hasta: ${formatDateForArca(job.billingPeriodTo)}`);
   if (job.dueDate && !sameSummaryText(dueDate, formatDateForArca(job.dueDate))) missing.push(`Vencimiento: ${formatDateForArca(job.dueDate)}`);
-  const summaryRecipientCuitMatches = recipientCuitsMatch(recipientCuit, expectedRecipientCuit);
-  if (!summaryRecipientCuitMatches) missing.push("CUIT del receptor");
-  if (summaryRecipientCuitMatches && expectedRecipientName && !recipientIdentityMatches(
-    { cuit: recipientCuit, name: recipientName },
-    { cuit: expectedRecipientCuit, name: expectedRecipientName },
-  )) missing.push("Razón social del receptor");
-  if (!sameSummaryText(recipientVat, expectedVat)) missing.push(`Condición frente al IVA: ${expectedVat}`);
-  if (!saleConditionMatches(saleCondition, job.saleCondition)) missing.push(`Condición de venta: ${formatExpectedSummarySignal(saleConditionSummarySignal(job.saleCondition) ?? job.saleCondition)}`);
+  if (job.recipientKind === "anonymous-final-consumer") {
+    if (recipientCuit.count > 1 || (recipientCuit.count === 1 && Boolean(recipientCuit.value))) missing.push("CUIT del receptor vacío");
+    if (hasUnexpectedAnonymousRecipientRow(recipientBlock)) missing.push("Bloque del receptor anónimo sin filas inesperadas");
+    if (recipientName.count !== 1 || Boolean(recipientName.value)) missing.push("Razón Social del receptor vacía");
+    if (recipientAddress.count !== 1 || Boolean(recipientAddress.value)) missing.push("Domicilio Comercial vacío");
+  } else {
+    const expectedRecipientCuit = evidence.recipientCuit ?? job.recipientCuit;
+    const expectedRecipientName = evidence.recipientName ?? job.recipientName;
+    const summaryRecipientCuitMatches = recipientCuit.count === 1 && recipientCuitsMatch(recipientCuit.value, expectedRecipientCuit);
+    if (!summaryRecipientCuitMatches) missing.push("CUIT del receptor");
+    if (summaryRecipientCuitMatches && expectedRecipientName && !(recipientName.count === 1 && recipientIdentityMatches(
+      { cuit: recipientCuit.value, name: recipientName.value },
+      { cuit: expectedRecipientCuit, name: expectedRecipientName },
+    ))) missing.push("Razón social del receptor");
+    const expectedAddress = evidence.recipientCommercialAddress ?? job.recipientCommercialAddress;
+    if (recipientAddress.count !== 1 || !recipientAddress.value) {
+      missing.push("Domicilio Comercial");
+    } else if (expectedAddress && !commercialAddressesMatch(recipientAddress.value, expectedAddress)) {
+      missing.push(`Domicilio Comercial: ${expectedAddress}`);
+    }
+  }
+  if (!absentOptionalSummaryEvidence.recipientEmailBlank) missing.push("Email del receptor vacío");
+  if (!absentOptionalSummaryEvidence.recipientAssociatedVoucherAbsent) missing.push("Comprobantes Asociados: -");
+  if (recipientVat.count !== 1 || !sameSummaryText(recipientVat.value, expectedVat)) missing.push(`Condición frente al IVA: ${expectedVat}`);
+  if (saleCondition.count !== 1 || !saleConditionMatches(saleCondition.value, job.saleCondition)) missing.push(`Condición de venta: ${formatExpectedSummarySignal(saleConditionSummarySignal(job.saleCondition) ?? job.saleCondition)}`);
   if (!invoiceItemRowMatches(detailBlock, expectedDescription, job.amount)) {
     missing.push(`Ítem: ${expectedDescription}; cantidad 1; precio unitario ${formatArcaMoney(job.amount)}`);
   }
   if (!sameSummaryText(total, formatArcaMoney(job.amount))) missing.push(formatArcaMoney(job.amount));
 
-  const summaryAddress = extractAfter(recipientBlock, /(?:^|\n)\s*Domicilio Comercial\s+([^\r\n]+)/im);
-  const expectedAddress = evidence.recipientCommercialAddress ?? job.recipientCommercialAddress;
-  if (!summaryAddress) {
-    missing.push("Domicilio Comercial");
-  } else if (expectedAddress && !commercialAddressesMatch(summaryAddress, expectedAddress)) {
-    missing.push(`Domicilio Comercial: ${expectedAddress}`);
-  }
-
   return missing;
+}
+
+function hasUnexpectedAnonymousRecipientRow(recipientBlock: string): boolean {
+  const allowedIndividuallyVerifiedRow = /^(?:CUIT|Raz[oó]n Social|Domicilio Comercial|Email|Comprobantes Asociados|Condici[oó]n frente al IVA|Condiciones? de Venta)(?:[ \t]*:[ \t]*.*|[ \t]+.*|[ \t]*)$/iu;
+  return recipientBlock.split(/\r?\n/u).some((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) return false;
+    return !allowedIndividuallyVerifiedRow.test(line);
+  });
+}
+
+function extractUniqueRecipientSummaryBlock(bodyText: string): string | undefined {
+  const recipientHeadingCount = [...bodyText.matchAll(/(?:^|\n)\s*Datos del Receptor\s*(?:\r?\n|$)/gim)].length;
+  return recipientHeadingCount === 1
+    ? extractSummarySection(bodyText, /Datos del Receptor/i, /Detalle de la Operaci[oó]n/i)
+    : undefined;
+}
+
+function parseAbsentOptionalRecipientSummaryEvidence(recipientBlock: string): {
+  recipientEmailBlank: boolean;
+  recipientAssociatedVoucherAbsent: boolean;
+} {
+  const recipientEmail = extractSummaryLabeledRows(recipientBlock, "Email");
+  const associatedVouchers = extractSummaryLabeledRows(recipientBlock, "Comprobantes Asociados");
+  return {
+    recipientEmailBlank: recipientEmail.count === 1 && !recipientEmail.value,
+    recipientAssociatedVoucherAbsent: associatedVouchers.count === 1 && associatedVouchers.value === "-",
+  };
+}
+
+function extractSummaryLabeledRows(value: string, labelSource: string): { count: number; value?: string } {
+  const label = new RegExp(`^[ \\t]*${labelSource}[ \\t]*:?`, "iu");
+  const values = value.split(/\r?\n/u).flatMap((line) => {
+    const match = label.exec(line);
+    return match ? [line.slice(match[0].length).trim()] : [];
+  });
+  return values.length === 1
+    ? { count: 1, ...(values[0] ? { value: values[0] } : {}) }
+    : { count: values.length };
 }
 
 function extractSummaryVoucherType(bodyText: string): string | undefined {

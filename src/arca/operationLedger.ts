@@ -52,6 +52,14 @@ export class OperationLedger {
     this.now = options.now ?? (() => new Date());
   }
 
+  async peek(operationId: string): Promise<LedgerEntry | undefined> {
+    return await this.withOperationLock(
+      operationId,
+      async () => await this.readValidated(operationId),
+      { ensureDirectory: false },
+    );
+  }
+
   async get(operationId: string): Promise<LedgerEntry | undefined> {
     return await this.withOperationLock(operationId, async () => {
       const existing = await this.readValidated(operationId);
@@ -242,8 +250,12 @@ export class OperationLedger {
       && this.ownerIsCurrent(existing.owner));
   }
 
-  private async withOperationLock<T>(operationId: string, action: () => Promise<T>): Promise<T> {
-    await fs.mkdir(this.directory, { recursive: true });
+  private async withOperationLock<T>(
+    operationId: string,
+    action: () => Promise<T>,
+    options: { ensureDirectory?: boolean } = {},
+  ): Promise<T> {
+    if (options.ensureDirectory !== false) await fs.mkdir(this.directory, { recursive: true });
     const release = await acquireLocalOsMutex(
       `operation-ledger\0${path.resolve(this.directory)}\0${operationId}`,
       `la operación ${operationId}`,

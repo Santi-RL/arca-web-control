@@ -1,6 +1,6 @@
 # Job v2 de la capacidad pública
 
-La única capacidad automatizada actual es `invoice-services-single-item`: Factura C, concepto Servicios, moneda local y un ítem, únicamente hasta el resumen. La emisión está deshabilitada por el manifiesto vigente.
+`invoice-services-single-item` cubre un receptor identificado por CUIT. `invoice-services-single-item-consumidor-final-anonimo` separa el Consumidor Final sin identificar. Ambas capacidades se limitan a Factura C, concepto Servicios, moneda local, un ítem, Chrome visible y preparación productiva únicamente hasta el resumen. La segunda tiene una revalidación irreversible visible registrada, pero continúa sin promoción; ninguna habilita emisión productiva ni modo oculto.
 
 Ejemplo sintético:
 
@@ -48,7 +48,29 @@ Ejemplo sintético:
 }
 ```
 
-`intentId` es un UUID generado por la capa agente para la solicitud actual: no es un dato fiscal ni se muestra al usuario. Se conserva al reintentar o reconstruir esa misma solicitud y se renueva para una intención comercial nueva, aun si todos los datos coinciden. `intentRevision` comienza en `1` y solo se incrementa cuando el usuario corrige o completa el borrador antes del límite irreversible. `recipientCommercialAddress` es opcional. Si se omite, ARCA debe devolver exactamente un domicilio; con más de uno, el agente muestra las opciones y espera una elección humana, conserva `intentId` e incrementa `intentRevision` al reenviar la dirección elegida. El ledger solo acepta esa revisión desde `failed_before_emit` o una preparación huérfana; `unknown` y `emitted` siguen siendo terminales. `dueDate` puede omitirse o usar `Default`; en ambos casos se calcula cinco días corridos desde `date`. `amount` es el precio unitario del único ítem: cantidad `1`, precio unitario, subtotal y total deben coincidir después de la verificación de ARCA.
+Para un Consumidor Final sin identificar, declarar la variante de forma positiva y omitir por completo CUIT, nombre y domicilio:
+
+```json
+{
+  "intentId": "00000000-0000-4000-8000-000000000002",
+  "intentRevision": 1,
+  "issuerSelector": "Emisor ficticio",
+  "recipientKind": "anonymous-final-consumer",
+  "recipientVatCondition": "Consumidor Final",
+  "pointOfSale": 2,
+  "date": "15/06/2030",
+  "billingPeriodFrom": "01/06/2030",
+  "billingPeriodTo": "30/06/2030",
+  "dueDate": "Default",
+  "saleCondition": "Transferencia bancaria",
+  "description": "Servicio de prueba",
+  "amount": "123.456,78"
+}
+```
+
+`recipientKind: "anonymous-final-consumer"` es el único discriminante de esta variante y solo admite `recipientVatCondition: "Consumidor Final"`. No enviar `recipientCuit`, `recipientName` ni `recipientCommercialAddress`, tampoco como cadenas vacías. La ausencia de `recipientKind` conserva el contrato histórico del receptor identificado y sigue exigiendo `recipientCuit`; nunca inferir anonimato porque falten campos o porque la condición frente al IVA sea `Consumidor Final`.
+
+`intentId` es un UUID generado por la capa agente para la solicitud actual: no es un dato fiscal ni se muestra al usuario. Se conserva al reintentar o reconstruir esa misma solicitud y se renueva para una intención comercial nueva, aun si todos los datos coinciden. `intentRevision` comienza en `1` y solo se incrementa cuando el usuario corrige o completa el borrador antes del límite irreversible. Para un receptor identificado, `recipientCommercialAddress` es opcional: si se omite, ARCA debe devolver exactamente un domicilio; con más de uno, el agente muestra las opciones y espera una elección humana, conserva `intentId` e incrementa `intentRevision` al reenviar la dirección elegida. El ledger solo acepta esa revisión desde `failed_before_emit` o una preparación huérfana; `unknown` y `emitted` siguen siendo terminales. `dueDate` puede omitirse o usar `Default`; en ambos casos se calcula cinco días corridos desde `date`. `amount` es el precio unitario del único ítem: cantidad `1`, precio unitario, subtotal y total deben coincidir después de la verificación de ARCA.
 
 Reglas:
 
@@ -58,9 +80,14 @@ Reglas:
 - Mantener `amount` como decimal con dos dígitos. Si llega como número JSON, debe tener como máximo dos decimales y se rechaza en lugar de redondearse.
 - Declarar obligatoriamente `currency: "ARS"`. La omisión y cualquier otra moneda se rechazan antes de navegar.
 - Usar CUIT válidos de once dígitos y el CUIT canónico del emisor como `issuerKey`.
-- Al validar el receptor contra ARCA, exigir un único CUIT visible y que sus once dígitos coincidan exactamente con `recipientCuit`; no extraer dígitos de texto arbitrario. Comparar la razón social conservando igual cantidad y orden de términos, normalizando mayúsculas, tildes y puntuación (`S.A.` equivale a `SA`). Si aparece una forma societaria, debe estar presente en ambos nombres y coincidir exactamente. Solo se admite una inserción, eliminación, sustitución o transposición de un carácter en un único término no numérico de al menos seis caracteres; bloquear omisiones, agregados, reordenamientos, formas societarias múltiples y cualquier otra diferencia.
+- Al validar un receptor identificado contra ARCA, exigir un único CUIT visible y que sus once dígitos coincidan exactamente con `recipientCuit`; no extraer dígitos de texto arbitrario. Comparar la razón social conservando igual cantidad y orden de términos, normalizando mayúsculas, tildes y puntuación (`S.A.` equivale a `SA`). Si aparece una forma societaria, debe estar presente en ambos nombres y coincidir exactamente. Solo se admite una inserción, eliminación, sustitución o transposición de un carácter en un único término no numérico de al menos seis caracteres; bloquear omisiones, agregados, reordenamientos, formas societarias múltiples y cualquier otra diferencia.
+- Para `anonymous-final-consumer`, seleccionar exactamente la condición `Consumidor Final`, esperar que ARCA termine de cargar el selector de tipo de documento y releerlo sin tocarlo ni disparar `change`. Debe existir un único tipo visible y habilitado, `CUIT`, ya preseleccionado por ARCA. Un default distinto, vacío, duplicado o deshabilitado detiene la preparación como variante. Comprobar positivamente que número de documento, nombre y domicilio estén vacíos y que el resumen mantenga CUIT, razón social y domicilio sin valor; una fila duplicada o la falta de esta evidencia también detiene la preparación. En cada página o copia del PDF, la fila del receptor anónimo admite únicamente una etiqueta `CUIT` sin valor en la misma fila de `Razón Social` vacía y sin prefijo adicional, o bien ninguna etiqueta `CUIT` pero el marcador obligatorio exacto `Doc.: -` inmediatamente antes de `Razón Social`. Una fila sin ninguno de los dos marcadores, cualquier otro tipo o valor documental, una etiqueta duplicada dentro del mismo rol o sección o cualquier CUIT adicional mantiene `unknown`. Ambas representaciones requieren razón social y domicilio vacíos, IVA `Consumidor Final`, un bloque receptor único y contiguo y que el único CUIT no vacío de la página coincida con el emisor. El mismo CUIT emisor repetido una vez por copia conserva una única identidad.
+- Si el PDF contiene varias páginas o copias, validar cada una por separado contra el job. Cada página debe contener exactamente una ocurrencia etiquetada del número de comprobante y exactamente una del CAE; todas deben resolver valores y datos fiscales idénticos. Una página ausente, inválida o discrepante mantiene `unknown`. No deduplicar globalmente antes de validar la unicidad interna de cada página o copia.
+- `Email` y `Comprobantes Asociados` son campos optativos que el contrato vigente no modela. Dejarlos sin completar y comprobar, antes de avanzar, que el email y todos los campos de comprobantes asociados permanezcan vacíos. En el resumen, exigir una única fila `Email` sin valor y una única fila `Comprobantes Asociados` con `-`. Si el usuario pide alguno de esos valores, detenerse y tratarlo como una variante aún no modelada ni aprendida; no completarlo por inferencia.
+- Seleccionar el punto de venta por su valor exacto y no por domicilio. Después de la selección, esperar e inspeccionar el selector dependiente de tipo de comprobante, exigir una única opción habilitada `Factura C`, seleccionarla y releer ambos valores. Si `Factura C` no aparece, está deshabilitada, se duplica o el selector es ambiguo, mostrar las opciones disponibles y detenerse.
 - Si falta el vencimiento, Servicios aplica cinco días corridos desde `date`, la fecha del comprobante.
 - Dejar actividad, referencia comercial y unidad de medida vacías salvo indicación expresa.
 - Omitir `outputDir` para usar la base privada predeterminada. Por compatibilidad puede indicar `"."` o una subcarpeta relativa de `downloads`, pero solo cambia la base: la estructura final por emisor, año y mes siempre se genera automáticamente. Se rechazan rutas absolutas, UNC y segmentos `..`.
 - Después de validar el PDF, número, CAE y hash, archivar `Nombre - FC-C - 00001-00000042.pdf` junto a un JSON privado de metadatos. Facturas, notas de crédito y notas de débito usan códigos cerrados `FC`, `NC` y `ND` más la letra del comprobante.
 - Rechazar Facturas A/B, Productos, conceptos mixtos, múltiples ítems, cualquier moneda distinta de ARS, notas, recibos y lotes como variantes no aprendidas. En ARCA debe existir un único checkbox visible `Moneda Extranjera` y permanecer desmarcado.
+- Llegar a un resumen verificado no autoriza ninguna emisión. El literal `EMITIR` solo puede consumirse dentro del carril explícito de una capacidad cuyo manifiesto permanezca pendiente de revalidación, después de mostrar el resumen completo. La capacidad anónima ya registró esa validación visible, pero no está promovida y no expone emisión productiva; cualquier promoción requiere una decisión humana separada.

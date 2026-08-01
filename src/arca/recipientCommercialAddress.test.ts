@@ -45,6 +45,10 @@ async function openFixture(browser: Browser, addressControls: string): Promise<P
       <label>Condición frente al IVA
         <select id="idivareceptor"><option selected>Consumidor Final</option></select>
       </label>
+      <label>Email <input id="email" name="emailReceptor"></label>
+      <label>Punto de venta asociado <input name="cmpAsociadoPtoVta"></label>
+      <label>Número asociado <input name="cmpAsociadoNro"></label>
+      <label>Fecha asociada <input name="cmpAsociadoFechaEmision"></label>
       ${addressControls}
     `,
   }));
@@ -175,6 +179,8 @@ test("Otro/Otra exige y captura el domicilio personalizado en lugar del texto de
     const evidence = await captureRecipientEvidence(page, job);
     assert.equal(evidence.recipientCommercialAddress, "Pasaje Imaginario 321, CABA");
     assert.notEqual(evidence.recipientCommercialAddress, "Otra");
+    assert.equal(evidence.recipientEmailBlank, true);
+    assert.equal(evidence.recipientAssociatedVoucherAbsent, true);
 
     await page.locator("#domicilioOtro").fill("Domicilio Distinto 999");
     await assert.rejects(() => captureRecipientEvidence(page, job), /domicilio comercial visible no coincide con el job/i);

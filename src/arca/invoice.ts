@@ -4,7 +4,7 @@ import { formatDateForArca } from "../utils/date.js";
 import { askText } from "../io/prompt.js";
 import { pauseIfCaptcha } from "./captcha.js";
 import { FlowContext } from "./flowContext.js";
-import { assertNoArcaAccessFailure, candidate, clickFirstVisible, fillFirstVisible, selectOptionContaining, waitForArcaDocumentReady } from "./pageHelpers.js";
+import { assertNoArcaAccessFailure, candidate, clickFirstVisible, fillFirstVisible, selectOptionContaining, waitForArcaDocumentReady, waitForUniqueSelectedEnabledOptionByVisibleText } from "./pageHelpers.js";
 import { captureCurrencyEvidence, captureDateEvidence, captureDetailEvidence, captureIssuerEvidence, captureRecipientEvidence, InvoiceControlEvidence } from "./controlEvidence.js";
 import { assertInvoiceRegimeConfigured } from "../issuers/profile.js";
 import { measureArcaPerformance } from "./performance.js";
@@ -109,9 +109,13 @@ export async function fillInvoice(page: Page, job: ResolvedInvoiceJob, context?:
     await fillRecipientData(page, job, context);
     Object.assign(evidence, await captureRecipientEvidence(page, job));
 
+  const recipientExpected = job.recipientKind === "anonymous-final-consumer"
+    ? `Debe verse condición IVA Consumidor Final, sin número de documento, razón social ni domicilio${job.saleCondition ? ` y condición de venta ${job.saleCondition}` : ""}.`
+    : `Debe verse el CUIT receptor ${onlyDigits(job.recipientCuit)}${job.recipientName ? ` (${job.recipientName})` : ""}${job.recipientVatCondition ? `, condición IVA ${job.recipientVatCondition}` : ""}${job.saleCondition ? ` y condición de venta ${job.saleCondition}` : ""}. Razón social y domicilio deben estar autocompletados por ARCA.`;
+
   await context?.guided?.checkpoint(page, {
     title: "Receptor cargado",
-    expected: `Debe verse el CUIT receptor ${onlyDigits(job.recipientCuit)}${job.recipientName ? ` (${job.recipientName})` : ""}${job.recipientVatCondition ? `, condicion IVA ${job.recipientVatCondition}` : ""}${job.saleCondition ? ` y condicion de venta ${job.saleCondition}` : ""}. Razon social y domicilio deben estar autocompletados por ARCA.`,
+    expected: recipientExpected,
     nextAction: "El sistema continuara al detalle de la factura.",
   });
 
@@ -194,9 +198,25 @@ async function fillBillingPeriodAndDueDate(page: Page, job: ResolvedInvoiceJob, 
 
 async function fillRecipientData(page: Page, job: ResolvedInvoiceJob, context?: FlowContext): Promise<void> {
   assertOfficialArcaRcelUrl(page.url(), "la carga del receptor");
+  if (job.recipientKind === "anonymous-final-consumer") {
+    const documentTypeLocator = page.locator("#idtipodocreceptor, select[name*='tipodoc' i], select[id*='tipodoc' i]");
+    const documentType = await uniqueVisibleControl(documentTypeLocator, "tipo de documento receptor");
+    const dependencyObservation = await observeRecipientDocumentTypeDependency(page, documentType);
+    try {
+      const vat = await uniqueVisibleControl(page.locator("#idivareceptor, select[name*='ivareceptor' i]"), "condición IVA receptor");
+      await selectOptionContaining(vat, job.recipientVatCondition);
+      await context?.guided?.recordSelectorAttempt({ action: "select", description: "condición IVA receptor", candidate: "#idivareceptor o name contiene ivareceptor", result: "used", visibleCount: 1 });
+      await waitForStableAnonymousDocumentType(page, documentTypeLocator, dependencyObservation);
+    } finally {
+      await stopObservingRecipientDocumentTypeDependency(page, dependencyObservation);
+    }
+    await checkSaleCondition(page, job.saleCondition, context);
+    return;
+  }
   if (job.recipientVatCondition) {
     const vat = await uniqueVisibleControl(page.locator("#idivareceptor, select[name*='ivareceptor' i]"), "condición IVA receptor");
     await selectOptionContaining(vat, job.recipientVatCondition);
+    await context?.guided?.recordSelectorAttempt({ action: "select", description: "condición IVA receptor", candidate: "#idivareceptor o name contiene ivareceptor", result: "used", visibleCount: 1 });
   }
   const documentType = await uniqueVisibleControl(page.locator("#idtipodocreceptor, select[name*='tipodoc' i], select[id*='tipodoc' i]"), "tipo de documento receptor");
   await selectOptionContaining(documentType, "CUIT");
@@ -210,6 +230,151 @@ async function fillRecipientData(page: Page, job: ResolvedInvoiceJob, context?: 
   await measureArcaPerformance("prepare_recipient_autofill", async () => await waitForRecipientAutofill(page));
   await ensureCommercialAddress(page, job, context);
   await checkSaleCondition(page, job.saleCondition, context);
+}
+
+type RecipientDocumentTypeDependencyObservation = {
+  initialOptionsSignature: string;
+  initialSelectHandle: Awaited<ReturnType<Locator["elementHandle"]>>;
+  initialMutationRevision: number;
+  navigationRevision: number;
+  onFrameNavigated: (frame: ReturnType<Page["mainFrame"]>) => void;
+};
+
+type RecipientDocumentTypeMutationState = {
+  revision: number;
+  observer: MutationObserver;
+};
+
+type RecipientDocumentTypeMutationGlobal = typeof globalThis & {
+  __arcaRecipientDocumentTypeMutationState?: RecipientDocumentTypeMutationState;
+};
+
+async function observeRecipientDocumentTypeDependency(
+  page: Page,
+  select: Locator,
+): Promise<RecipientDocumentTypeDependencyObservation> {
+  const observation: RecipientDocumentTypeDependencyObservation = {
+    initialOptionsSignature: await recipientDocumentTypeOptionsSignature(select),
+    initialSelectHandle: await select.elementHandle(),
+    initialMutationRevision: 0,
+    navigationRevision: 0,
+    onFrameNavigated: () => undefined,
+  };
+  observation.onFrameNavigated = (frame) => {
+    if (frame === page.mainFrame()) observation.navigationRevision += 1;
+  };
+  page.on("framenavigated", observation.onFrameNavigated);
+  await select.evaluate((element) => {
+    const scope = globalThis as RecipientDocumentTypeMutationGlobal;
+    scope.__arcaRecipientDocumentTypeMutationState?.observer.disconnect();
+    const state = { revision: 0 } as RecipientDocumentTypeMutationState;
+    const observer = new MutationObserver((records) => {
+      if (records.some((record) => record.type === "childList"
+        || record.type === "characterData"
+        || record.type === "attributes"
+        || record.target instanceof HTMLOptionElement
+        || record.target instanceof HTMLOptGroupElement)) {
+        state.revision += 1;
+      }
+    });
+    state.observer = observer;
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ["disabled", "label", "selected"],
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    scope.__arcaRecipientDocumentTypeMutationState = state;
+  });
+  observation.initialMutationRevision = await recipientDocumentTypeMutationRevision(page);
+  return observation;
+}
+
+async function waitForStableAnonymousDocumentType(
+  page: Page,
+  locator: Locator,
+  observation: RecipientDocumentTypeDependencyObservation,
+  timeoutMs = 10000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let previousStableState = "";
+  let stableSince = 0;
+  let stableReads = 0;
+
+  while (Date.now() < deadline) {
+    assertOfficialArcaRcelUrl(page.url(), "la espera del tipo documental dependiente de la condición IVA");
+    const controls = await visibleLocators(locator).catch(() => []);
+    if (controls.length > 1) {
+      throw new Error("ARCA mostró controles ambiguos para el tipo de documento receptor.");
+    }
+    const current = controls[0];
+    if (current) {
+      const signature = await recipientDocumentTypeOptionsSignature(current).catch(() => "");
+      const selectWasReplaced = await current
+        .evaluate((element, initialElement) => element !== initialElement, observation.initialSelectHandle)
+        .catch(() => true);
+      const mutationRevision = await recipientDocumentTypeMutationRevision(page);
+      const dependencyWasObserved = observation.navigationRevision > 0
+        || mutationRevision > observation.initialMutationRevision
+        || selectWasReplaced
+        || signature !== observation.initialOptionsSignature;
+      const readyState = await page.evaluate(() => document.readyState).catch(() => "loading");
+      const stableState = `${observation.navigationRevision}\u0000${mutationRevision}\u0000${selectWasReplaced ? "1" : "0"}\u0000${signature}`;
+      if (dependencyWasObserved && readyState !== "loading" && stableState === previousStableState) {
+        stableReads += 1;
+      } else if (dependencyWasObserved && readyState !== "loading") {
+        stableReads = 1;
+        stableSince = Date.now();
+      } else {
+        stableReads = 0;
+        stableSince = 0;
+      }
+      previousStableState = dependencyWasObserved ? stableState : "";
+      if (dependencyWasObserved && stableReads >= 3 && Date.now() - stableSince >= 200) {
+        await waitForUniqueSelectedEnabledOptionByVisibleText(
+          current,
+          "CUIT",
+          "tipo de documento predeterminado del Consumidor Final",
+          Math.max(1, deadline - Date.now()),
+        );
+        return;
+      }
+    } else {
+      previousStableState = "";
+      stableReads = 0;
+      stableSince = 0;
+    }
+    await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
+  }
+
+  await assertNoArcaAccessFailure(page);
+  throw new Error("ARCA no mostró una actualización estable del tipo de documento dependiente de la condición IVA.");
+}
+
+async function recipientDocumentTypeOptionsSignature(select: Locator): Promise<string> {
+  return await select.locator("option").evaluateAll((elements) => elements.map((element) => {
+    const option = element as HTMLOptionElement;
+    const parentDisabled = option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled;
+    return `${(option.textContent ?? "").trim()}\u0000${option.disabled || parentDisabled ? "1" : "0"}\u0000${option.selected ? "1" : "0"}`;
+  }).join("\u0001"));
+}
+
+async function recipientDocumentTypeMutationRevision(page: Page): Promise<number> {
+  return await page.evaluate(() => (globalThis as RecipientDocumentTypeMutationGlobal).__arcaRecipientDocumentTypeMutationState?.revision ?? 0).catch(() => 0);
+}
+
+async function stopObservingRecipientDocumentTypeDependency(
+  page: Page,
+  observation: RecipientDocumentTypeDependencyObservation,
+): Promise<void> {
+  page.off("framenavigated", observation.onFrameNavigated);
+  await page.evaluate(() => {
+    const scope = globalThis as RecipientDocumentTypeMutationGlobal;
+    scope.__arcaRecipientDocumentTypeMutationState?.observer.disconnect();
+    delete scope.__arcaRecipientDocumentTypeMutationState;
+  }).catch(() => undefined);
+  await observation.initialSelectHandle?.dispose().catch(() => undefined);
 }
 
 async function fillOperationDetail(page: Page, description: string, unitPrice: string, amountCents: number, unit: string | undefined, context?: FlowContext): Promise<InvoiceControlEvidence> {
@@ -477,24 +642,257 @@ function formatArcaUnitPrice(amount: number): string {
   return amount.toFixed(2);
 }
 
-async function selectInitialVoucherData(page: Page, pointOfSale: string, voucherType: string, context?: FlowContext): Promise<void> {
+export async function selectInitialVoucherData(page: Page, pointOfSale: string, voucherType: string, context?: FlowContext): Promise<void> {
   assertOfficialArcaRcelUrl(page.url(), "la selección del punto de venta y comprobante");
   const pointOfSaleSelect = await uniqueVisibleControl(page.locator("#puntodeventa, select[name='puntodeventa' i]"), "punto de venta");
-  await selectOptionContaining(pointOfSaleSelect, pointOfSale);
-  const voucherTypeSelect = await uniqueVisibleControl(page.locator(initialVoucherTypeSelector), "tipo de comprobante");
-  await measureArcaPerformance("prepare_voucher_options", async () => await waitForSelectOptions(voucherTypeSelect, 2));
-  await selectOptionContaining(voucherTypeSelect, voucherType);
+  const initialVoucherTypeSelect = await uniqueVisibleControl(page.locator(initialVoucherTypeSelector), "tipo de comprobante");
+  const initialVoucherOptions = await readVoucherOptions(initialVoucherTypeSelect);
+  let navigationRevision = 0;
+  const observeMainFrameNavigation = (frame: ReturnType<Page["mainFrame"]>) => {
+    if (frame === page.mainFrame()) navigationRevision += 1;
+  };
+  page.on("framenavigated", observeMainFrameNavigation);
+  const dependencyObservation: VoucherDependencyObservation = {
+    initialNavigationRevision: navigationRevision,
+    initialPointOfSaleWasTarget: await selectedPointOfSaleMatches(pointOfSaleSelect, pointOfSale),
+    initialOnlyPlaceholder: meaningfulVoucherOptions(initialVoucherOptions).length === 0,
+    initialOptionsSignature: voucherOptionsSignature(initialVoucherOptions),
+    initialSelectHandle: await initialVoucherTypeSelect.elementHandle(),
+  };
+  await installVoucherMutationObserver(initialVoucherTypeSelect);
+  try {
+    await selectOptionContaining(pointOfSaleSelect, pointOfSale);
+    const options = await measureArcaPerformance(
+      "prepare_voucher_options",
+      async () => await waitForStableVoucherOptions(page, pointOfSale, dependencyObservation, () => navigationRevision),
+    );
+    const normalizedVoucherType = normalizeExactOptionText(voucherType);
+    if (normalizedVoucherType !== normalizeExactOptionText("Factura C")) {
+      throw new Error(`La capacidad actual exige Factura C y recibió un tipo distinto. No se continuará.`);
+    }
+    const enabledMatches = options.filter((option) => !option.disabled && normalizeExactOptionText(option.text) === normalizedVoucherType);
+    if (enabledMatches.length !== 1) {
+      throw unavailableVoucherTypeError(pointOfSale, options);
+    }
+
+    const voucherTypeSelect = await uniqueVisibleControl(page.locator(initialVoucherTypeSelector), "tipo de comprobante");
+    await voucherTypeSelect.selectOption({ index: (enabledMatches[0] as VoucherOption).index });
+    await waitForArcaDocumentReady(page);
+    await assertSelectedInitialVoucherData(page, pointOfSale, voucherType);
+  } finally {
+    await uninstallVoucherMutationObserver(page);
+    await dependencyObservation.initialSelectHandle?.dispose().catch(() => undefined);
+    page.off("framenavigated", observeMainFrameNavigation);
+  }
   await context?.guided?.recordSelectorAttempt({ action: "select", description: "punto de venta", candidate: "#puntodeventa", result: "used", visibleCount: 1 });
   await context?.guided?.recordSelectorAttempt({ action: "select", description: "tipo de comprobante", candidate: "#universocomprobante / name=universoComprobante", result: "used", visibleCount: 1 });
 }
 
-async function waitForSelectOptions(locator: ReturnType<Page["locator"]>, minimumOptions: number): Promise<void> {
-  assertOfficialArcaRcelUrl(locator.page().url(), "la lectura de tipos de comprobante");
-  await locator.locator("option").nth(minimumOptions - 1).waitFor({ state: "attached", timeout: 10000 }).catch(() => undefined);
-  const optionCount = await locator.locator("option").count().catch(() => 0);
-  if (optionCount >= minimumOptions) return;
-  const options = await locator.locator("option").allTextContents().catch(() => []);
-  throw new Error(`El select no cargo opciones suficientes. Opciones visibles: ${options.map((option) => option.trim()).join(" | ")}`);
+type VoucherOption = {
+  index: number;
+  text: string;
+  value: string;
+  disabled: boolean;
+  selected: boolean;
+};
+
+type VoucherDependencyObservation = {
+  initialNavigationRevision: number;
+  initialPointOfSaleWasTarget: boolean;
+  initialOnlyPlaceholder: boolean;
+  initialOptionsSignature: string;
+  initialSelectHandle: Awaited<ReturnType<Locator["elementHandle"]>>;
+};
+
+type VoucherMutationState = {
+  revision: number;
+  observer: MutationObserver;
+};
+
+type VoucherMutationGlobal = typeof globalThis & {
+  __arcaVoucherMutationState?: VoucherMutationState;
+};
+
+async function waitForStableVoucherOptions(
+  page: Page,
+  pointOfSale: string,
+  observation: VoucherDependencyObservation,
+  navigationRevision: () => number,
+  timeoutMs = 10000,
+): Promise<VoucherOption[]> {
+  const deadline = Date.now() + timeoutMs;
+  let observedNavigationRevision = navigationRevision();
+  let previousStableState = "";
+  let stableSince = 0;
+  let stableReads = 0;
+  let lastOptions: VoucherOption[] = [];
+
+  while (Date.now() < deadline) {
+    assertOfficialArcaRcelUrl(page.url(), "la espera de tipos de comprobante dependientes del punto de venta");
+    const currentNavigationRevision = navigationRevision();
+    if (currentNavigationRevision !== observedNavigationRevision) {
+      observedNavigationRevision = currentNavigationRevision;
+      previousStableState = "";
+      stableSince = 0;
+      stableReads = 0;
+    }
+
+    const pointOfSaleControls = await visibleLocators(page.locator("#puntodeventa, select[name='puntodeventa' i]")).catch(() => []);
+    const voucherTypeControls = await visibleLocators(page.locator(initialVoucherTypeSelector)).catch(() => []);
+    if (pointOfSaleControls.length > 1 || voucherTypeControls.length > 1) {
+      throw new Error("ARCA mostró controles ambiguos para punto de venta o tipo de comprobante.");
+    }
+    const currentPointOfSale = pointOfSaleControls[0];
+    const currentVoucherType = voucherTypeControls[0];
+    if (currentPointOfSale && currentVoucherType && await selectedPointOfSaleMatches(currentPointOfSale, pointOfSale)) {
+      const readyState = await page.evaluate(() => document.readyState).catch(() => "loading");
+      const options = await readVoucherOptions(currentVoucherType).catch(() => []);
+      lastOptions = options;
+      const meaningful = meaningfulVoucherOptions(options);
+      const signature = voucherOptionsSignature(options);
+      const selectWasReplaced = await currentVoucherType
+        .evaluate((element, initialElement) => element !== initialElement, observation.initialSelectHandle)
+        .catch(() => true);
+      const mutationRevision = await voucherOptionsMutationRevision(page);
+      const dependencyWasObserved = currentNavigationRevision !== observation.initialNavigationRevision
+        || mutationRevision > 0
+        || selectWasReplaced
+        || signature !== observation.initialOptionsSignature
+        || observation.initialPointOfSaleWasTarget
+        || observation.initialOnlyPlaceholder;
+      if (!dependencyWasObserved) {
+        previousStableState = "";
+        stableSince = 0;
+        stableReads = 0;
+      } else {
+        const stableState = `${currentNavigationRevision}\u0000${mutationRevision}\u0000${selectWasReplaced ? "1" : "0"}\u0000${signature}`;
+        if (readyState !== "loading" && meaningful.length > 0 && stableState === previousStableState) {
+          stableReads += 1;
+        } else {
+          stableReads = 1;
+          stableSince = Date.now();
+        }
+        previousStableState = stableState;
+      }
+      if (dependencyWasObserved && meaningful.length > 0 && stableReads >= 3 && Date.now() - stableSince >= 200) {
+        await assertNoArcaAccessFailure(page);
+        return options;
+      }
+    } else {
+      previousStableState = "";
+      stableSince = 0;
+      stableReads = 0;
+    }
+    await page.waitForTimeout(Math.min(50, Math.max(1, deadline - Date.now())));
+  }
+
+  await assertNoArcaAccessFailure(page);
+  throw unavailableVoucherTypeError(pointOfSale, lastOptions);
+}
+
+async function installVoucherMutationObserver(select: Locator): Promise<void> {
+  await select.evaluate((element) => {
+    const scope = globalThis as VoucherMutationGlobal;
+    scope.__arcaVoucherMutationState?.observer.disconnect();
+    const state = { revision: 0 } as VoucherMutationState;
+    const observer = new MutationObserver((records) => {
+      const changedOptions = records.some((record) => record.type === "childList"
+        || record.type === "characterData"
+        || record.target instanceof HTMLOptionElement
+        || record.target instanceof HTMLOptGroupElement);
+      if (changedOptions) state.revision += 1;
+    });
+    state.observer = observer;
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ["disabled", "label", "value"],
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
+    scope.__arcaVoucherMutationState = state;
+  });
+}
+
+async function voucherOptionsMutationRevision(page: Page): Promise<number> {
+  return await page.evaluate(() => (globalThis as VoucherMutationGlobal).__arcaVoucherMutationState?.revision ?? 0).catch(() => 0);
+}
+
+async function uninstallVoucherMutationObserver(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const scope = globalThis as VoucherMutationGlobal;
+    scope.__arcaVoucherMutationState?.observer.disconnect();
+    delete scope.__arcaVoucherMutationState;
+  }).catch(() => undefined);
+}
+
+async function readVoucherOptions(select: Locator): Promise<VoucherOption[]> {
+  return await select.locator("option").evaluateAll((elements) => elements.map((element, index) => {
+    const option = element as HTMLOptionElement;
+    const parentDisabled = option.parentElement instanceof HTMLOptGroupElement && option.parentElement.disabled;
+    return {
+      index,
+      text: (option.textContent ?? "").trim(),
+      value: option.value,
+      disabled: option.disabled || parentDisabled,
+      selected: option.selected,
+    };
+  }));
+}
+
+function meaningfulVoucherOptions(options: VoucherOption[]): VoucherOption[] {
+  return options.filter((option) => {
+    const sentinel = option.value === "" || option.value === "-1";
+    return !(sentinel && (option.text.trim() === "" || /^seleccionar(?:\.*)?$/i.test(option.text)));
+  });
+}
+
+function voucherOptionsSignature(options: VoucherOption[]): string {
+  return options.map((option) => `${option.value}\u0000${option.text}\u0000${option.disabled ? "1" : "0"}`).join("\u0001");
+}
+
+function unavailableVoucherTypeError(pointOfSale: string, options: VoucherOption[]): Error {
+  const available = meaningfulVoucherOptions(options)
+    .map((option) => `${option.text || option.value}${option.disabled ? " (deshabilitada)" : ""}`)
+    .join(" | ") || "ninguno";
+  return new Error(`El punto de venta ${pointOfSale} no ofrece una única opción habilitada Factura C. Tipos disponibles: ${available}. No se continuará.`);
+}
+
+async function assertSelectedInitialVoucherData(page: Page, pointOfSale: string, voucherType: string): Promise<void> {
+  assertOfficialArcaRcelUrl(page.url(), "la relectura de punto de venta y tipo de comprobante");
+  const pointOfSaleSelect = await uniqueVisibleControl(page.locator("#puntodeventa, select[name='puntodeventa' i]"), "punto de venta");
+  const voucherTypeSelect = await uniqueVisibleControl(page.locator(initialVoucherTypeSelector), "tipo de comprobante");
+  if (!await selectedPointOfSaleMatches(pointOfSaleSelect, pointOfSale)) {
+    throw new Error("ARCA no conservó el punto de venta solicitado después de cargar los tipos de comprobante.");
+  }
+  const selectedVoucherOptions = (await readVoucherOptions(voucherTypeSelect)).filter((option) => option.selected);
+  if (selectedVoucherOptions.length !== 1
+    || selectedVoucherOptions[0]?.disabled
+    || normalizeExactOptionText(selectedVoucherOptions[0]?.text ?? "") !== normalizeExactOptionText(voucherType)) {
+    throw new Error("ARCA no conservó una selección única y habilitada de Factura C.");
+  }
+}
+
+async function selectedPointOfSaleMatches(select: Locator, expected: string): Promise<boolean> {
+  const options = await readVoucherOptions(select);
+  const selected = options.filter((option) => option.selected);
+  const matches = options.filter((option) => pointOfSaleOptionMatches(option, expected));
+  if (selected.length !== 1 || matches.length !== 1) return false;
+  const option = matches[0] as VoucherOption;
+  return option.selected && !option.disabled;
+}
+
+function pointOfSaleOptionMatches(option: VoucherOption, expected: string): boolean {
+  const normalizedExpected = normalizeExactOptionText(expected);
+  const normalizedText = normalizeExactOptionText(option.text).replace(/\s+/g, "");
+  const normalizedValue = normalizeExactOptionText(option.value);
+  return normalizedValue === normalizedExpected
+    || normalizedText === normalizedExpected
+    || (/^[0-9]+$/u.test(normalizedExpected) && new RegExp(`^${escapeRegExp(normalizedExpected)}(?:\\D|$)`, "u").test(normalizedText));
+}
+
+function normalizeExactOptionText(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 async function waitForInvoiceScreen(page: Page, control: ReturnType<Page["locator"]>, description: string, context?: FlowContext, timeoutMs = 10000): Promise<void> {

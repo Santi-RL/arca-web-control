@@ -19,14 +19,27 @@ export type SessionVisibilityMode = "visible" | "production-hidden";
 export type CapabilityMaturity = "observed" | "assisted" | "automated_to_summary" | "controlled_irreversible" | "fast_path";
 export type LearnedFlowCapability = string;
 
-export type InvoiceJob = {
-  schemaVersion: 2;
-  operationId: string;
-  issuerKey: string;
+type IdentifiedInvoiceRecipient = {
+  /** La ausencia conserva el contrato histórico de receptor identificado por CUIT. */
+  recipientKind?: never;
   recipientCuit: string;
   recipientName?: string;
   recipientVatCondition: string;
   recipientCommercialAddress?: string;
+};
+
+type AnonymousFinalConsumerInvoiceRecipient = {
+  recipientKind: "anonymous-final-consumer";
+  recipientVatCondition: "Consumidor Final";
+  recipientCuit?: never;
+  recipientName?: never;
+  recipientCommercialAddress?: never;
+};
+
+type InvoiceJobFields = {
+  schemaVersion: 2;
+  operationId: string;
+  issuerKey: string;
   voucherType: string;
   pointOfSale: string;
   date: string;
@@ -45,12 +58,16 @@ export type InvoiceJob = {
   outputDir?: string;
 };
 
-export type ResolvedInvoiceJob = Omit<InvoiceJob, "amount" | "outputDir"> & {
+export type InvoiceJob = InvoiceJobFields & (IdentifiedInvoiceRecipient | AnonymousFinalConsumerInvoiceRecipient);
+
+type ResolveInvoiceJob<T extends InvoiceJob> = T extends InvoiceJob ? Omit<T, "amount" | "outputDir"> & {
   amount: number;
   amountCents: number;
   amountDecimal: string;
   outputDir: string;
-};
+} : never;
+
+export type ResolvedInvoiceJob = ResolveInvoiceJob<InvoiceJob>;
 
 export type RunInvoiceOptions = {
   guided: boolean;

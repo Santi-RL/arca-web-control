@@ -37,6 +37,7 @@
     "arca:capability:check": "tsx scripts/arca-capability.mts check",
     "arca:capability:promote": "tsx scripts/arca-capability.mts promote",
     "arca:mcp": "tsx scripts/arca-mcp.mts",
+    "arca:issuer:resolve": "tsx scripts/arca-issuer-resolve.mts",
     "arca:issuer:profile": "tsx scripts/arca-issuer-profile.mts",
     "mcp:smoke": "tsx scripts/mcp-smoke.mts",
     "validate:skill": "tsx scripts/validate-skill.mts",

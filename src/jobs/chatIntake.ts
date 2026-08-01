@@ -2,14 +2,10 @@ import { z } from "zod";
 import { privateInvoiceIntakeSchema, type PrivateInvoiceIntake } from "./privateIntake.js";
 import { invoiceJobV2Schema } from "./schema.js";
 
-const conversationalInputSchema = z.object({
+const conversationalCommonShape = {
   intentId: z.string().uuid(),
   intentRevision: z.number().int().min(1).max(9999).default(1),
   issuerSelector: z.string().trim().min(1).max(200),
-  recipientCuit: z.string().trim().min(1),
-  recipientName: z.string().trim().min(1).optional(),
-  recipientVatCondition: z.string().trim().min(1),
-  recipientCommercialAddress: z.string().trim().min(1).optional(),
   pointOfSale: z.union([z.string(), z.number()]),
   date: z.string().trim().min(1),
   billingPeriodFrom: z.string().trim().min(1),
@@ -18,13 +14,34 @@ const conversationalInputSchema = z.object({
   saleCondition: z.string().trim().min(1),
   description: z.string().trim().min(1).max(1000),
   amount: z.union([z.string(), z.number()]),
-}).strict();
+};
+
+const conversationalInputSchema = z.union([
+  z.object({
+    ...conversationalCommonShape,
+    recipientKind: z.never().optional(),
+    recipientCuit: z.string().trim().min(1),
+    recipientName: z.string().trim().min(1).optional(),
+    recipientVatCondition: z.string().trim().min(1),
+    recipientCommercialAddress: z.string().trim().min(1).optional(),
+  }).strict(),
+  z.object({
+    ...conversationalCommonShape,
+    recipientKind: z.literal("anonymous-final-consumer"),
+    recipientVatCondition: z.literal("Consumidor Final"),
+    recipientCuit: z.never().optional(),
+    recipientName: z.never().optional(),
+    recipientCommercialAddress: z.never().optional(),
+  }).strict(),
+]);
 
 export function normalizeConversationalInvoiceInput(raw: unknown): PrivateInvoiceIntake {
   const input = conversationalInputSchema.parse(raw);
   const normalized = {
     ...input,
-    recipientCuit: normalizeCuit(input.recipientCuit),
+    ...(input.recipientKind === "anonymous-final-consumer"
+      ? {}
+      : { recipientCuit: normalizeCuit(input.recipientCuit) }),
     pointOfSale: String(input.pointOfSale).trim(),
     date: normalizeDate(input.date, "fecha de comprobante"),
     billingPeriodFrom: normalizeDate(input.billingPeriodFrom, "período desde"),
@@ -34,14 +51,22 @@ export function normalizeConversationalInvoiceInput(raw: unknown): PrivateInvoic
     amount: normalizeAmount(input.amount),
   };
   const intake = privateInvoiceIntakeSchema.parse(normalized);
+  const recipient = intake.recipientKind === "anonymous-final-consumer"
+    ? {
+        recipientKind: intake.recipientKind,
+        recipientVatCondition: intake.recipientVatCondition,
+      }
+    : {
+        recipientCuit: intake.recipientCuit,
+        recipientName: intake.recipientName,
+        recipientVatCondition: intake.recipientVatCondition,
+        recipientCommercialAddress: intake.recipientCommercialAddress,
+      };
   invoiceJobV2Schema.parse({
     schemaVersion: 2,
     operationId: "validation-only",
     issuerKey: "20000000001",
-    recipientCuit: intake.recipientCuit,
-    recipientName: intake.recipientName,
-    recipientVatCondition: intake.recipientVatCondition,
-    recipientCommercialAddress: intake.recipientCommercialAddress,
+    ...recipient,
     voucherType: "Factura C",
     pointOfSale: intake.pointOfSale,
     date: intake.date,

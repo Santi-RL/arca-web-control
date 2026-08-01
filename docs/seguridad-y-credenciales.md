@@ -26,10 +26,13 @@ El formato y las reglas están documentados en la referencia de credenciales de 
 ## Alta, actualización y resolución en Windows
 
 - `arca:credentials:set -- "<nombre>"` valida el CUIT y rechaza duplicados antes de solicitar la clave.
+- `arca:issuer:resolve -- --issuer "<nombre-o-CUIT>"` resuelve el índice no secreto sin cargar claves ni abrir Chrome. Si el nombre tiene un typo acotado, está invertido u omite un único segundo nombre, devuelve candidatos para confirmación; nunca elige uno automáticamente.
 - `arca:credentials:update -- <cuit> ACTUALIZAR_CREDENCIAL` es la única ruta para reemplazar nombre o clave de un CUIT existente.
 - `arca:credentials:delete -- <cuit> ELIMINAR_CREDENCIAL` elimina la identidad fiscal completa.
 - Los comandos operativos deben usar CUIT. Un nombre se admite únicamente si coincide con una sola credencial; dos personas llamadas igual producen un error de ambigüedad.
 - Nunca inferir que dos nombres iguales son la misma persona ni crear dos registros para el mismo CUIT.
+
+Nombre descriptivo y CUIT son metadatos visibles para el usuario propietario del índice. Pueden mostrarse como candidatos o listarse por pedido explícito; siguen prohibidos en Git y en artefactos públicos junto con cualquier dato real. Las claves, rutas privadas, huellas y material de sesión permanecen secretos.
 
 ## Rechazo de credenciales durante el login
 

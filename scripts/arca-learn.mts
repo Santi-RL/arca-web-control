@@ -21,6 +21,7 @@ import { LearningTerminalGate } from "../src/learning/terminalGate.js";
 import { publicLearningError } from "../src/learning/publicError.js";
 import { writeCurrentLearningState } from "../src/learning/sessionState.js";
 import { resumeLearningAuthentication } from "../src/learning/authentication.js";
+import { sessionCredentialProviderFingerprintEnv } from "../src/config/credentialProvider.js";
 
 await run();
 
@@ -65,7 +66,7 @@ async function run(): Promise<void> {
 
   try {
     const config = loadRuntimeConfig();
-    const credentials = loadCredentials(args.issuer);
+    const credentials = loadCredentials(args.issuer, process.env[sessionCredentialProviderFingerprintEnv]);
     const directory = path.join(runtime.learning, `${new Date().toISOString().replace(/[:.]/g, "-")}-${args.capability}`);
     const token = randomBytes(32).toString("hex");
     const profile = path.join(config.profileRoot, `learn_${credentials.issuerKey}`);

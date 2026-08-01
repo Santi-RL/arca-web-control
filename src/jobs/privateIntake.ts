@@ -10,14 +10,10 @@ import { invoiceJobV2Schema } from "./schema.js";
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/u);
 
-export const privateInvoiceIntakeSchema = z.object({
+const privateInvoiceCommonShape = {
   intentId: z.string().uuid(),
   intentRevision: z.number().int().min(1).max(9999).default(1),
   issuerSelector: z.string().trim().min(1).max(200),
-  recipientCuit: z.string().trim().min(1),
-  recipientName: z.string().trim().min(1).optional(),
-  recipientVatCondition: z.string().trim().min(1),
-  recipientCommercialAddress: z.string().trim().min(1).optional(),
   pointOfSale: z.string().trim().min(1),
   date: isoDate,
   billingPeriodFrom: isoDate,
@@ -26,7 +22,26 @@ export const privateInvoiceIntakeSchema = z.object({
   saleCondition: z.string().trim().min(1),
   description: z.string().trim().min(1).max(1000),
   amount: z.string().trim().min(1),
-}).strict();
+};
+
+export const privateInvoiceIntakeSchema = z.union([
+  z.object({
+    ...privateInvoiceCommonShape,
+    recipientKind: z.never().optional(),
+    recipientCuit: z.string().trim().min(1),
+    recipientName: z.string().trim().min(1).optional(),
+    recipientVatCondition: z.string().trim().min(1),
+    recipientCommercialAddress: z.string().trim().min(1).optional(),
+  }).strict(),
+  z.object({
+    ...privateInvoiceCommonShape,
+    recipientKind: z.literal("anonymous-final-consumer"),
+    recipientVatCondition: z.literal("Consumidor Final"),
+    recipientCuit: z.never().optional(),
+    recipientName: z.never().optional(),
+    recipientCommercialAddress: z.never().optional(),
+  }).strict(),
+]);
 
 export type PrivateInvoiceIntake = z.input<typeof privateInvoiceIntakeSchema>;
 
@@ -58,14 +73,22 @@ export async function createPrivateInvoiceJob(
     throw new Error("La identidad canónica del emisor no coincide con su CUIT.");
   }
 
+  const recipient = input.recipientKind === "anonymous-final-consumer"
+    ? {
+        recipientKind: input.recipientKind,
+        recipientVatCondition: input.recipientVatCondition,
+      }
+    : {
+        recipientCuit: input.recipientCuit,
+        recipientName: input.recipientName,
+        recipientVatCondition: input.recipientVatCondition,
+        recipientCommercialAddress: input.recipientCommercialAddress,
+      };
   const normalizedWithoutIdentity = invoiceJobV2Schema.parse({
     schemaVersion: 2,
     operationId: "invoice-idempotency-seed",
     issuerKey: issuer.cuit,
-    recipientCuit: input.recipientCuit,
-    recipientName: input.recipientName,
-    recipientVatCondition: input.recipientVatCondition,
-    recipientCommercialAddress: input.recipientCommercialAddress,
+    ...recipient,
     voucherType: "Factura C",
     pointOfSale: input.pointOfSale,
     date: input.date,

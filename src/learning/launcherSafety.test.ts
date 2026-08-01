@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { buildLearningWorkerArgs, isLearningShutdownMessage, learningShutdownMessage } from "./launcher.js";
+import { buildLearningWorkerArgs, isLearningShutdownMessage, learningShutdownMessage, replaceLearningIssuerWithCuit } from "./launcher.js";
 
 test("el launcher no termina PIDs recuperados del estado ni elimina locks ajenos", async () => {
   const source = await fs.readFile(path.resolve("scripts", "arca-learn-start.mts"), "utf8");
@@ -11,7 +11,18 @@ test("el launcher no termina PIDs recuperados del estado ni elimina locks ajenos
   assert.match(source, /child\.kill\s*\(\)/);
   assert.match(source, /detached:\s*true/);
   assert.match(source, /stdio:\s*\["ignore", out, err, "ipc"\]/);
+  const identityPreflight = source.indexOf("const issuerIdentity = resolveCredentialRoutingIdentity");
+  const logCreation = source.indexOf("const timestamp = new Date()", identityPreflight);
+  const workerSpawn = source.indexOf("const child = spawn", identityPreflight);
+  assert.ok(identityPreflight >= 0 && logCreation > identityPreflight && workerSpawn > logCreation);
+  assert.match(source, /replaceLearningIssuerWithCuit\(values, issuerIdentity\.cuit\)/);
+  assert.match(source, /\[sessionCredentialProviderFingerprintEnv\]: providerFingerprint/);
   assert.deepEqual(buildLearningWorkerArgs("worker.mts", ["--issuer", "emisor"]), ["--import", "tsx", "worker.mts", "--issuer", "emisor"]);
+  assert.deepEqual(replaceLearningIssuerWithCuit(
+    ["--issuer", "Valentina Quiroga", "--capability", "prueba"],
+    "20000000001",
+  ), ["--issuer", "20000000001", "--capability", "prueba"]);
+  assert.throws(() => replaceLearningIssuerWithCuit(["--issuer", "uno", "--issuer", "dos"], "20000000001"), /único emisor/);
   assert.equal(isLearningShutdownMessage(learningShutdownMessage), true);
   assert.equal(isLearningShutdownMessage({ type: "otro" }), false);
 });
@@ -25,6 +36,7 @@ test("el worker instala el cierre controlado antes de abrir Chrome", async () =>
   assert.match(source, /context = await chromium\.launchPersistentContext[\s\S]*?assertStartupActive\(\)/);
   assert.match(source, /terminalAccepted = true[\s\S]*?if \(terminalAccepted \|\| error instanceof InvalidArcaCredentialsError\) requestStop\(\)/);
   assert.match(source, /loginToArca\([\s\S]*?manualIntervention:\s*false/);
+  assert.match(source, /loadCredentials\(args\.issuer, process\.env\[sessionCredentialProviderFingerprintEnv\]\)/);
   assert.doesNotMatch(source, /manualIntervention:\s*true/);
 });
 

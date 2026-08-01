@@ -11,11 +11,12 @@ export const learnStartInput = { issuerKey: z.string().min(1), capability: z.str
 export const textInput = { text: z.string().min(1).max(2000) };
 export const checkpointInput = { name: z.string().min(1).max(120) };
 export const prepareInput = { jobPath: z.string().min(1) };
-export const prepareChatInput = {
+export const prepareChatInput = z.object({
   intentId: z.string().uuid().describe("UUID generado por el agente para esta intención; se reutiliza solo al reintentar la misma factura."),
   intentRevision: z.number().int().min(1).max(9999).default(1).describe("Revisión privada del borrador; solo se incrementa tras una corrección humana previa al primer clic irreversible."),
   issuerSelector: z.string().trim().min(1).max(200),
-  recipientCuit: z.string().trim().min(1),
+  recipientKind: z.literal("anonymous-final-consumer").optional().describe("Solo se informa para un Consumidor Final anónimo; su ausencia conserva el receptor identificado por CUIT."),
+  recipientCuit: z.string().trim().min(1).optional(),
   recipientName: z.string().trim().min(1).optional(),
   recipientVatCondition: z.string().trim().min(1),
   recipientCommercialAddress: z.string().trim().min(1).optional(),
@@ -27,6 +28,33 @@ export const prepareChatInput = {
   saleCondition: z.string().trim().min(1),
   description: z.string().trim().min(1).max(1000),
   amount: z.union([z.string(), z.number()]),
-};
+}).strict().superRefine((input, context) => {
+  if (input.recipientKind === "anonymous-final-consumer") {
+    if (input.recipientVatCondition !== "Consumidor Final") {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["recipientVatCondition"],
+        message: "El receptor anónimo exige exactamente Consumidor Final.",
+      });
+    }
+    for (const field of ["recipientCuit", "recipientName", "recipientCommercialAddress"] as const) {
+      if (input[field] !== undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: `El receptor anónimo prohíbe ${field}.`,
+        });
+      }
+    }
+    return;
+  }
+  if (!input.recipientCuit) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["recipientCuit"],
+      message: "El receptor identificado exige recipientCuit.",
+    });
+  }
+});
 export const emitInput = { preparedInvoiceId: z.string().uuid(), confirmation: z.literal("EMITIR") };
 export const downloadInput = { outputPath: z.string().min(1).regex(/\.pdf$/i, "El destino debe ser un nombre PDF relativo a downloads.") };

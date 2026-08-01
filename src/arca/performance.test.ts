@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import test from "node:test";
 import { startArcaPerformance } from "./performance.js";
 
@@ -20,4 +21,12 @@ test("una medición cerrada se informa una sola vez y sin datos fiscales", () =>
     if (previous === undefined) delete process.env.ARCA_PERF_TRACE;
     else process.env.ARCA_PERF_TRACE = previous;
   }
+});
+
+test("la medición confirmación a PDF se cierra al guardar la descarga y antes de validarla", async () => {
+  const source = await fs.readFile(new URL("./liveSession.ts", import.meta.url), "utf8");
+  const saved = source.indexOf("const stagingPdfPath = await this.savePrintPdf");
+  const measured = source.indexOf("const confirmationToPdfMs = onPdfObtained?.()", saved);
+  const inspected = source.indexOf("const pdfEvidence = await inspectArcaInvoicePdf", saved);
+  assert.ok(saved >= 0 && measured > saved && inspected > measured);
 });

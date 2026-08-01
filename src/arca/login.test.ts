@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { chromium } from "playwright";
-import { InvalidArcaCredentialsError, invalidCredentialsErrorFromLog, isInvalidArcaCredentialsMessage, startupErrorFromLog } from "./loginErrors.js";
+import { credentialProviderErrorFromLog, InvalidArcaCredentialsError, invalidCredentialsErrorFromLog, isInvalidArcaCredentialsMessage, startupErrorFromLog } from "./loginErrors.js";
 import { CaptchaRequiredError } from "./captchaErrors.js";
 import { continueArcaAccessIfRequested } from "./login.js";
 
@@ -20,6 +20,21 @@ test("el launcher traduce el marcador sin exponer datos ni sugerir reintento", (
 
 test("un log sin rechazo explícito no se interpreta como credencial inválida", () => {
   assert.equal(invalidCredentialsErrorFromLog("Timeout iniciando aprendizaje."), undefined);
+});
+
+test("el launcher traduce errores del proveedor sin copiar el contenido privado del log", () => {
+  const sentinel = ["valor", "centinela", "no-real"].join("-");
+  for (const marker of [
+    "ARCA_CREDENTIAL_PROVIDER_UNAVAILABLE",
+    "ARCA_CREDENTIAL_AMBIGUOUS",
+    "ARCA_CREDENTIAL_CONFIRMATION_REQUIRED",
+    "ARCA_CREDENTIAL_NOT_FOUND",
+  ]) {
+    const error = credentialProviderErrorFromLog(`stack ${marker} ${sentinel}`);
+    assert.ok(error);
+    assert.match(error.message, new RegExp(marker));
+    assert.doesNotMatch(error.message, new RegExp(sentinel));
+  }
 });
 
 test("el launcher reconstruye una señal tipada y sanitizada de captcha", () => {

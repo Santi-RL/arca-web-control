@@ -5,6 +5,7 @@ import { CapabilityMaturity, ResolvedInvoiceJob } from "../types.js";
 
 export const maturityOrder = ["observed", "assisted", "automated_to_summary", "controlled_irreversible", "fast_path"] as const;
 const invoiceCommands = ["prepare-invoice", "emit-prepared-invoice"] as const;
+const invoiceRecipientKinds = ["identified-cuit", "anonymous-final-consumer"] as const;
 const hiddenRuntimeCommands = new Set(["status", "snapshot", "screenshot", ...invoiceCommands]);
 const invoiceRuntimeScopeSchema = z.object({
   kind: z.literal("invoice"),
@@ -12,6 +13,7 @@ const invoiceRuntimeScopeSchema = z.object({
   concept: z.string().trim().min(1),
   currency: z.literal("ARS"),
   itemCount: z.number().int().positive(),
+  recipientKind: z.enum(invoiceRecipientKinds).default("identified-cuit"),
 }).strict();
 const capabilitySchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
@@ -82,12 +84,14 @@ const capabilitySchema = z.object({
 
 export type CapabilityManifest = z.infer<typeof capabilitySchema>;
 export type InvoiceCapabilityCommand = typeof invoiceCommands[number];
+export type InvoiceRecipientKind = typeof invoiceRecipientKinds[number];
 export type InvoiceRuntimeRequest = {
   command: InvoiceCapabilityCommand;
   voucherType: string;
   concept: string;
   currency: string;
   itemCount: number;
+  recipientKind?: InvoiceRecipientKind;
   capabilityId?: string;
   requireHidden?: boolean;
 };
@@ -119,7 +123,7 @@ export async function requireHiddenCapability(id: string): Promise<CapabilityMan
 }
 
 export async function requireInvoiceJobCapability(
-  job: Pick<ResolvedInvoiceJob, "voucherType" | "concept" | "currency">,
+  job: Pick<ResolvedInvoiceJob, "voucherType" | "concept" | "currency"> & { recipientKind?: InvoiceRecipientKind },
   command: InvoiceCapabilityCommand,
   options: { capabilityId?: string; requireHidden?: boolean; registryRoot?: string } = {},
 ): Promise<CapabilityManifest> {
@@ -129,6 +133,7 @@ export async function requireInvoiceJobCapability(
     concept: job.concept,
     currency: job.currency,
     itemCount: 1,
+    recipientKind: resolveInvoiceRecipientKind(job.recipientKind),
     capabilityId: options.capabilityId,
     requireHidden: options.requireHidden,
   }, options.registryRoot);
@@ -159,18 +164,20 @@ export async function requireVisibleInvoiceRevalidationCapability(
 }
 
 export async function requireInvoiceJobVisibleRevalidation(
-  job: Pick<ResolvedInvoiceJob, "voucherType" | "concept" | "currency">,
+  job: Pick<ResolvedInvoiceJob, "voucherType" | "concept" | "currency"> & { recipientKind?: InvoiceRecipientKind },
   capabilityId: string,
   root = path.resolve("config", "capabilities"),
 ): Promise<CapabilityManifest> {
   const capability = await requireVisibleInvoiceRevalidationCapability(capabilityId, root);
   const scope = capability.runtimeScope;
+  const recipientKind = resolveInvoiceRecipientKind(job.recipientKind);
   if (
     scope?.kind !== "invoice"
     || canonicalRuntimeValue(scope.voucherType) !== canonicalRuntimeValue(job.voucherType)
     || canonicalRuntimeValue(scope.concept) !== canonicalRuntimeValue(job.concept)
     || canonicalRuntimeValue(scope.currency) !== canonicalRuntimeValue(job.currency)
     || scope.itemCount !== 1
+    || scope.recipientKind !== recipientKind
   ) {
     throw new Error(`La factura no coincide con el alcance cerrado de revalidación de ${capabilityId}.`);
   }
@@ -184,6 +191,7 @@ export async function requireInvoiceCapability(
   if (!Number.isInteger(request.itemCount) || request.itemCount <= 0) {
     throw new Error("La cantidad de ítems de la factura debe ser un entero positivo.");
   }
+  const recipientKind = resolveInvoiceRecipientKind(request.recipientKind);
 
   const registry = await loadCapabilityRegistry(root);
   const requestedRegistry = request.capabilityId
@@ -205,6 +213,7 @@ export async function requireInvoiceCapability(
     if (canonicalRuntimeValue(scope.concept) !== canonicalRuntimeValue(request.concept)) return false;
     if (canonicalRuntimeValue(scope.currency) !== canonicalRuntimeValue(request.currency)) return false;
     if (scope.itemCount !== request.itemCount) return false;
+    if (scope.recipientKind !== recipientKind) return false;
     if (request.command === "emit-prepared-invoice" && capability.confirmation !== "EMITIR") return false;
     return true;
   });
@@ -234,6 +243,14 @@ function maturityRank(value: CapabilityMaturity): number {
 
 function canonicalRuntimeValue(value: string): string {
   return value.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function resolveInvoiceRecipientKind(value: InvoiceRecipientKind | undefined): InvoiceRecipientKind {
+  if (value === undefined) return "identified-cuit";
+  if (!invoiceRecipientKinds.includes(value)) {
+    throw new Error(`Tipo de receptor no admitido por el registro de capacidades: ${String(value)}.`);
+  }
+  return value;
 }
 
 function assertHiddenAllowed(capability: CapabilityManifest): void {

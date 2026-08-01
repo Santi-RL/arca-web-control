@@ -171,6 +171,10 @@ test("rechaza tamaños fuera del rango cerrado", async () => {
 
 test("el recuperador valida, hashea y publica solo la copia privada estable", async () => {
   const script = await fs.readFile(path.resolve("scripts", "arca-invoice-recover-pdf.mts"), "utf8");
+  assert.match(
+    script,
+    /const current = dryRun\s*\? await ledger\.peek\(job\.operationId\)\s*:\s*await ledger\.get\(job\.operationId\);/u,
+  );
   const staged = script.indexOf("await stagePrivateRecoveryPdf(");
   const inspect = script.indexOf("inspectArcaInvoicePdf(stableSource.path", staged);
   const hash = script.indexOf("sha256File(stableSource.path)", inspect);

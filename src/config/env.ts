@@ -37,8 +37,8 @@ function parseBrowserChannel(value: string | undefined): RuntimeConfig["browserC
   throw new Error("ARCA_PLAYWRIGHT_CHANNEL debe ser chrome, chromium o msedge.");
 }
 
-export function loadCredentials(issuerKey: string): ArcaCredentials {
-  return loadConfiguredCredential(getRuntimePaths(), issuerKey);
+export function loadCredentials(issuerKey: string, expectedProviderFingerprint?: string): ArcaCredentials {
+  return loadConfiguredCredential(getRuntimePaths(), issuerKey, expectedProviderFingerprint);
 }
 
 export async function loadCredentialsAsync(issuerKey: string, expectedProviderFingerprint?: string): Promise<ArcaCredentials> {

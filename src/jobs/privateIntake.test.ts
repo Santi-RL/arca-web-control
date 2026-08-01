@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { makeCanonicalTemporaryDirectory } from "../testing/temporaryDirectory.js";
 import { OperationLedger } from "../arca/operationLedger.js";
 import { resolvePrivateInvoiceJobPath } from "../config/privateJobs.js";
-import { createPrivateInvoiceJob } from "./privateIntake.js";
+import { createPrivateInvoiceJob, privateInvoiceIntakeSchema } from "./privateIntake.js";
 
 const input = {
   intentId: "00000000-0000-4000-8000-000000000001",
@@ -49,6 +49,7 @@ test("crea un job privado exclusivo, cerrado al alcance vigente y sin datos en e
   assert.equal(saved.pointOfSale, "00001");
   assert.equal(saved.dueDate, "2030-06-20");
   assert.equal(saved.outputDir, undefined);
+  assert.equal(Object.hasOwn(saved, "recipientKind"), false);
   const reused = await createPrivateInvoiceJob(input, {
     privateJobsRoot: jobs,
     trustedRuntimeRoot: runtime,
@@ -73,6 +74,37 @@ test("crea un job privado exclusivo, cerrado al alcance vigente y sin datos en e
   });
   assert.notEqual(distinct.operationId, created.operationId);
   assert.equal((await fs.readdir(jobs)).length, 2);
+});
+
+test("persiste el discriminante anónimo sin CUIT, nombre ni domicilio", async (context) => {
+  const runtime = await makeCanonicalTemporaryDirectory("arca-job-intake-anonymous-");
+  context.after(async () => { await fs.rm(runtime, { recursive: true, force: true }); });
+  const jobs = path.join(runtime, "jobs", "private");
+  await fs.mkdir(jobs, { recursive: true });
+  const { recipientCuit: _recipientCuit, recipientName: _recipientName, ...anonymousInput } = input;
+  const rawAnonymous = {
+    ...anonymousInput,
+    intentId: "00000000-0000-4000-8000-000000000004",
+    recipientKind: "anonymous-final-consumer",
+    recipientVatCondition: "Consumidor Final",
+  };
+  const created = await createPrivateInvoiceJob(rawAnonymous, {
+    privateJobsRoot: jobs,
+    trustedRuntimeRoot: runtime,
+    resolveIssuer: () => ({ issuerKey: "20000000001", cuit: "20000000001" }),
+    secureFile: async () => undefined,
+  });
+  const saved = JSON.parse(await fs.readFile(path.join(jobs, created.handle), "utf8")) as Record<string, unknown>;
+  assert.equal(saved.recipientKind, "anonymous-final-consumer");
+  assert.equal(saved.recipientVatCondition, "Consumidor Final");
+  assert.equal(Object.hasOwn(saved, "recipientCuit"), false);
+  assert.equal(Object.hasOwn(saved, "recipientName"), false);
+  assert.equal(Object.hasOwn(saved, "recipientCommercialAddress"), false);
+
+  assert.equal(privateInvoiceIntakeSchema.safeParse({ ...rawAnonymous, recipientVatCondition: "IVA Responsable Inscripto" }).success, false);
+  assert.equal(privateInvoiceIntakeSchema.safeParse({ ...rawAnonymous, recipientCuit: "20000000001" }).success, false);
+  assert.equal(privateInvoiceIntakeSchema.safeParse({ ...rawAnonymous, recipientName: "RECEPTOR FICTICIO" }).success, false);
+  assert.equal(privateInvoiceIntakeSchema.safeParse({ ...rawAnonymous, recipientCommercialAddress: "DOMICILIO FICTICIO 123" }).success, false);
 });
 
 test("redacta fallas de resolución del emisor antes de escribir", async (context) => {
