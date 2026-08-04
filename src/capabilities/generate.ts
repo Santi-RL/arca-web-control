@@ -14,7 +14,7 @@ const commands = [
   ["arca:issuer:resolve", "Resuelve rápidamente un emisor sobre el índice no secreto y propone candidatos sin cargar claves."],
   ["arca:invoice:prepare-chat", "Valida datos conversacionales, crea o reutiliza el job privado idempotente, inicia o reutiliza Chrome visible y devuelve el resumen."],
   ["arca:session:start", "Inicia una sesión y exige READY_STATE=portal; la revalidación irreversible requiere un modo visible explícito y exclusivo."],
-  ["arca:session:cmd", "Ejecuta comandos tipados sobre la sesión actual; resume-authentication exige una intervención humana previa y revalidate-prepared-invoice exige preparedInvoiceId vigente y EMITIR."],
+  ["arca:session:cmd", "Ejecuta comandos tipados sobre la sesión actual; emit-prepared-invoice exige preparedInvoiceId vigente y EMITIR, y revalidate-prepared-invoice queda reservado a validación controlada."],
   ["arca:session:stop", "Cierra la sesión de forma controlada."],
   ["arca:learn:start", "Inicia aprendizaje visible; ante captcha conserva Chrome y publica el estado pausado."],
   ["arca:learn:cmd", "Reanuda explícitamente una pausa de autenticación, inspecciona y controla de forma híbrida la sesión visible, agrega evidencia o finaliza el candidato."],

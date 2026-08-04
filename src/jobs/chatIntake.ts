@@ -47,6 +47,9 @@ export function normalizeConversationalInvoiceInput(raw: unknown): PrivateInvoic
     billingPeriodFrom: normalizeDate(input.billingPeriodFrom, "período desde"),
     billingPeriodTo: normalizeDate(input.billingPeriodTo, "período hasta"),
     dueDate: normalizeDueDate(input.dueDate),
+    recipientVatCondition: input.recipientKind === "anonymous-final-consumer"
+      ? input.recipientVatCondition
+      : normalizeRecipientVatCondition(input.recipientVatCondition),
     saleCondition: normalizeConversationalLabel(input.saleCondition, "condición de venta"),
     amount: normalizeAmount(input.amount),
   };
@@ -123,6 +126,21 @@ function normalizeDueDate(value: string | undefined): string | undefined {
   return normalizeDate(value, "fecha de vencimiento");
 }
 
+function normalizeRecipientVatCondition(value: string): string {
+  const normalized = normalizeConversationalLabel(value, "condición frente al IVA");
+  const alias = normalized
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  if (alias === "responsable inscripto" || alias === "iva responsable inscripto") {
+    return "IVA Responsable Inscripto";
+  }
+  if (alias === "consumidor final") return "Consumidor Final";
+  return normalized;
+}
+
 function normalizeAmount(value: string | number): string {
   if (typeof value === "number") {
     if (!Number.isFinite(value) || value <= 0) throw new Error("El importe debe ser positivo y finito.");
@@ -132,8 +150,15 @@ function normalizeAmount(value: string | number): string {
     return value.toFixed(2);
   }
   const compact = value.trim().replace(/^(?:ARS|\$)\s*/iu, "").replace(/\s+/g, "");
-  if (/^\d{1,3}(?:\.\d{3})*,\d{2}$/u.test(compact)) return compact.replace(/\./g, "").replace(",", ".");
-  if (/^\d+,\d{2}$/u.test(compact)) return compact.replace(",", ".");
-  if (/^\d+\.\d{2}$/u.test(compact)) return compact;
-  throw new Error("El importe debe incluir exactamente dos decimales, por ejemplo 123.456,78 o 123456.78.");
+  if (/^\d{1,3}(?:\.\d{3})*,\d{2}$/u.test(compact)) return requirePositiveAmount(compact.replace(/\./g, "").replace(",", "."));
+  if (/^\d+,\d{2}$/u.test(compact)) return requirePositiveAmount(compact.replace(",", "."));
+  if (/^\d+\.\d{2}$/u.test(compact)) return requirePositiveAmount(compact);
+  if (/^\d{1,3}(?:\.\d{3})+$/u.test(compact)) return requirePositiveAmount(`${compact.replace(/\./g, "")}.00`);
+  if (/^\d+$/u.test(compact)) return requirePositiveAmount(`${compact}.00`);
+  throw new Error("El importe debe ser un entero o incluir exactamente dos decimales, por ejemplo 1.500.000, 123.456,78 o 123456.78.");
+}
+
+function requirePositiveAmount(value: string): string {
+  if (/^0+\.00$/u.test(value)) throw new Error("El importe debe ser positivo.");
+  return value;
 }

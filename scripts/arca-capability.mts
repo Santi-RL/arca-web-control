@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isMaturity, loadCapabilityRegistry, parseCapabilityManifest } from "../src/capabilities/registry.js";
+import { buildPromotedCapabilityManifest, isMaturity, loadCapabilityRegistry } from "../src/capabilities/registry.js";
 import { renderCapabilities, renderSkillCapabilities, renderSkillCommands, writeGeneratedCapabilities } from "../src/capabilities/generate.js";
 import { writeJsonAtomic } from "../src/io/atomicJson.js";
 
@@ -24,11 +24,10 @@ if (operation === "sync") {
   if ((manifest.irreversibleAction || maturity === "fast_path" || enableHidden) && !humanApproved) {
     throw new Error("La promoción irreversible, fast_path o modo oculto requiere --human-approved después de una validación humana real.");
   }
-  if (enableHidden && maturity !== "fast_path") throw new Error("--enable-hidden solo se admite al promover a fast_path.");
   if (manifest.testEvidence.length === 0 || manifest.realEvidence.length === 0 || !manifest.lastValidatedVisible || !manifest.lastValidatedAt) {
     throw new Error("Faltan pruebas, evidencia real visible o validación humana para promover.");
   }
-  const next = parseCapabilityManifest({ ...manifest, maturity, hiddenAllowed: enableHidden });
+  const next = buildPromotedCapabilityManifest(manifest, maturity, enableHidden);
   await writeJsonAtomic(path.resolve("config", "capabilities", `${capabilityId}.json`), next);
   console.log(`CAPABILITY_PROMOTED=${capabilityId}:${maturity}`);
 } else {

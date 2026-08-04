@@ -15,10 +15,10 @@ Actualmente el alcance implementado se limita a dos capacidades fiscales: una Fa
 - Un solo ítem.
 - Ejecución visible en Windows.
 - Preparación automatizada hasta el resumen.
-- Implementación de emisión y recuperación del PDF conservada para revalidación, pero deshabilitada por el manifiesto vigente.
+- Emisión visible controlada después de la confirmación humana exacta `EMITIR`.
 - Archivo privado estandarizado por CUIT emisor, con PDF, metadatos JSON, hash y publicación sin sobrescritura.
 
-Ambas capacidades se encuentran en madurez `automated_to_summary`. La capacidad con receptor identificado permanece pendiente de revalidación visible; la variante de Consumidor Final anónimo tiene una revalidación visible registrada, pero no fue promovida. Ninguna incluye `emit-prepared-invoice` ni permite modo oculto.
+Ambas capacidades se encuentran en madurez `controlled_irreversible`, incluyen `emit-prepared-invoice` y tienen una revalidación visible registrada. Ninguna permite modo oculto.
 
 No están soportados actualmente:
 
@@ -121,18 +121,24 @@ No copie credenciales, archivos CSV de clientes ni valores reales a un issue, pu
 
 `.env.local` no puede usarse durante una sesión. Existe únicamente como vía transitoria para `arca:credentials:migrate-env`; después de migrar y comprobar el acceso, debe eliminarse. Consulte [Seguridad y credenciales](docs/seguridad-y-credenciales.md).
 
-## Preparar una Factura C de servicios
+## Preparar y emitir una Factura C de servicios
 
-Parta de [jobs/factura.example.json](jobs/factura.example.json) para comprender el contrato. Si los datos llegan por chat, use `npm run arca:invoice:prepare-chat` con JSON por `stdin`; el agente agrega un UUID privado `intentId` y `intentRevision: 1`, el comando normaliza fechas e importes, resuelve el emisor, persiste la identidad del job antes de abrir Chrome, inicia o reutiliza una sesión visible y devuelve el resumen sin exponer identificadores internos. El mismo `intentId` se conserva únicamente al reconstruir la misma solicitud; una factura nueva recibe otro aunque sus datos sean idénticos. Una corrección humana previa a la emisión conserva el UUID e incrementa la revisión. `arca:job:create`, `arca:session:start` y `arca:session:cmd` siguen disponibles como primitivas de diagnóstico.
+Parta de [jobs/factura.example.json](jobs/factura.example.json) para comprender el contrato. Si los datos llegan por chat, el agente reúne primero todos los campos obligatorios y solicita los faltantes en un único mensaje. Luego usa `npm run arca:invoice:prepare-chat` con JSON por `stdin`; agrega un UUID privado `intentId` y `intentRevision: 1`, normaliza fechas, importes enteros o con centavos y el alias `Responsable Inscripto`, resuelve el emisor, persiste la identidad del job antes de abrir Chrome, inicia o reutiliza una sesión visible y devuelve el resumen sin exponer identificadores internos. Si el nuevo pedido corresponde a otro emisor, la misma operación cierra automáticamente la sesión anterior cuando está viva e inactiva y abre la nueva, sin solicitar una autorización redundante; una sesión ocupada o no verificable bloquea la transición. El mismo `intentId` se conserva únicamente al reconstruir la misma solicitud; una factura nueva recibe otro aunque sus datos sean idénticos. Una corrección humana previa a la emisión conserva el UUID e incrementa la revisión. `arca:job:create`, `arca:session:start` y `arca:session:cmd` siguen disponibles como primitivas de diagnóstico.
 
 ```powershell
 npm run arca:session:start -- --issuer <CUIT_EMISOR>
 npm run arca:session:cmd -- prepare-invoice "<JOB_HANDLE_O_RUTA_PRIVADA_JOB_V2>"
 ```
 
-El comando devuelve un `preparedInvoiceId`. Revise en el navegador el emisor, receptor, punto de venta, fechas, moneda local, condición de IVA, condición de venta, descripción y total. La preparación se detiene si `Moneda Extranjera` está marcada, falta o aparece de forma ambigua.
+El comando devuelve un `preparedInvoiceId`. Revise en el navegador el emisor, el nombre legal y CUIT del receptor identificado —o la ausencia positiva de identidad del Consumidor Final anónimo—, punto de venta, fechas, moneda local, condición de IVA, condición de venta, descripción y total. La preparación se detiene si `Moneda Extranjera` está marcada, falta o aparece de forma ambigua.
 
-La versión pública actual se detiene aquí. No ejecute `emit-prepared-invoice`: el manifiesto lo rechaza hasta completar una nueva validación visible de la descarga automática del PDF y una promoción humana explícita. Cuando se vuelva a habilitar, conservará la confirmación exacta `EMITIR`; ninguna paráfrasis será válida.
+La preparación no autoriza la emisión. Después de mostrar el resumen completo, solo un mensaje humano nuevo exactamente igual a `EMITIR` permite ejecutar una única vez, sobre la misma sesión y sin reconstruir el formulario:
+
+```powershell
+npm run arca:session:cmd -- emit-prepared-invoice <preparedInvoiceId> EMITIR
+```
+
+`sí`, una confirmación anterior o cualquier paráfrasis no son válidos. El carril de revalidación queda reservado al desarrollo de una versión futura pendiente y no forma parte de la operación normal.
 
 Finalice la sesión de forma controlada:
 

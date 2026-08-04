@@ -17,8 +17,8 @@ export const prepareChatInput = z.object({
   issuerSelector: z.string().trim().min(1).max(200),
   recipientKind: z.literal("anonymous-final-consumer").optional().describe("Solo se informa para un Consumidor Final anónimo; su ausencia conserva el receptor identificado por CUIT."),
   recipientCuit: z.string().trim().min(1).optional(),
-  recipientName: z.string().trim().min(1).optional(),
-  recipientVatCondition: z.string().trim().min(1),
+  recipientName: z.string().trim().min(1).optional().describe("Razón social legal esperada. Omitir si el usuario solo dio una abreviatura o apodo; ARCA devolverá el nombre canónico para el resumen."),
+  recipientVatCondition: z.string().trim().min(1).describe("Condición frente al IVA. El intake normaliza el alias Responsable Inscripto al rótulo exacto de ARCA."),
   recipientCommercialAddress: z.string().trim().min(1).optional(),
   pointOfSale: z.union([z.string(), z.number()]),
   date: z.string().trim().min(1),
@@ -27,7 +27,7 @@ export const prepareChatInput = z.object({
   dueDate: z.string().trim().min(1).optional(),
   saleCondition: z.string().trim().min(1),
   description: z.string().trim().min(1).max(1000),
-  amount: z.union([z.string(), z.number()]),
+  amount: z.union([z.string(), z.number()]).describe("Importe del único ítem; admite enteros como 1.500.000 y valores exactos con hasta dos decimales."),
 }).strict().superRefine((input, context) => {
   if (input.recipientKind === "anonymous-final-consumer") {
     if (input.recipientVatCondition !== "Consumidor Final") {

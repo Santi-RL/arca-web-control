@@ -712,7 +712,7 @@ export class ArcaLiveSession {
 
     assertOfficialArcaRcelUrl(this.page.url(), "la lectura del estado RCEL");
     const body = await this.page.locator("body").innerText({ timeout: 3000 }).catch(() => "");
-    if (/RESUMEN DE DATOS|DATOS DE EMISI[OÓ]N|DATOS DEL RECEPTOR|DATOS DE LA OPERACI[OÓ]N/i.test(body)) {
+    if (requiresRcelMenuReturn(body)) {
       const menuButton = this.page.getByText(/Men[uú] Principal/i).first();
       if (await menuButton.isVisible().catch(() => false)) {
         assertOfficialArcaRcelUrl(this.page.url(), "el regreso al menú principal de RCEL");
@@ -968,6 +968,10 @@ export function classifyReadyState(url: string, title: string, body: string): Ar
   }
 
   return "otro";
+}
+
+export function requiresRcelMenuReturn(body: string): boolean {
+  return /RESUMEN DE DATOS|DATOS DE EMISI[OÓ]N|DATOS DEL RECEPTOR|DATOS DE LA OPERACI[OÓ]N|COMPROBANTE GENERADO/i.test(body);
 }
 
 function timestampForPath(): string {

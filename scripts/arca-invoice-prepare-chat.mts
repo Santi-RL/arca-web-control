@@ -7,7 +7,7 @@ import { resolveCredentialRoutingIdentity } from "../src/config/env.js";
 import { ensureRuntimeLayout, getRuntimePaths, useActiveSessionRuntimeLayout } from "../src/config/runtimePaths.js";
 import { parseConversationalInvoiceJson } from "../src/jobs/chatIntake.js";
 import { createPrivateInvoiceJob } from "../src/jobs/privateIntake.js";
-import { parseChatPreparationArgs, sanitizePreparationOutput, sessionMetadataMatches, sessionStatusIsReusable } from "../src/arca/chatPreparation.js";
+import { buildChatVisibleSessionStartArgs, parseChatPreparationArgs, sanitizePreparationOutput, sessionMetadataMatches, sessionStatusIsReusable } from "../src/arca/chatPreparation.js";
 import { startArcaPerformance } from "../src/arca/performance.js";
 import { captchaRequiredErrorFromLog, CaptchaRequiredError, isCaptchaRequiredError } from "../src/arca/captchaErrors.js";
 
@@ -82,8 +82,15 @@ async function reusableSession(currentPath: string, issuerKey: string, revalidat
 }
 
 async function startVisibleSession(cuit: string, revalidationCapability: string | undefined, timeoutMs: number): Promise<void> {
-  const args = ["--import", "tsx", path.resolve("scripts", "arca-session-start.mts"), "--issuer", cuit, "--timeout-ms", String(timeoutMs)];
-  if (revalidationCapability) args.push("--revalidate-irreversible", revalidationCapability);
+  // El pedido ya resolvió de forma unívoca al nuevo emisor. Si quedó una sesión
+  // anterior no reutilizable, el launcher puede reemplazarla sin otra pregunta:
+  // solo cierra una sesión viva e inactiva y falla cerrado si está ocupada o huérfana.
+  const args = buildChatVisibleSessionStartArgs({
+    scriptPath: path.resolve("scripts", "arca-session-start.mts"),
+    issuerCuit: cuit,
+    timeoutMs,
+    revalidationCapability,
+  });
   try {
     await execFileAsync(process.execPath, args, {
       encoding: "utf8",

@@ -2,6 +2,13 @@ import type { CurrentSessionState } from "./sessionState.js";
 
 export type ChatPreparationArgs = { revalidationCapability?: string; timeoutMs: number };
 
+export type ChatVisibleSessionStartArgs = {
+  scriptPath: string;
+  issuerCuit: string;
+  timeoutMs: number;
+  revalidationCapability?: string;
+};
+
 export function parseChatPreparationArgs(values: string[]): ChatPreparationArgs {
   let revalidationCapability: string | undefined;
   let timeoutMs = 180_000;
@@ -27,6 +34,21 @@ export function parseChatPreparationArgs(values: string[]): ChatPreparationArgs 
     throw new Error(`Argumento no reconocido: ${flag ?? "(vacío)"}.`);
   }
   return { revalidationCapability, timeoutMs };
+}
+
+export function buildChatVisibleSessionStartArgs(input: ChatVisibleSessionStartArgs): string[] {
+  const args = [
+    "--import",
+    "tsx",
+    input.scriptPath,
+    "--issuer",
+    input.issuerCuit,
+    "--timeout-ms",
+    String(input.timeoutMs),
+    "--force-new",
+  ];
+  if (input.revalidationCapability) args.push("--revalidate-irreversible", input.revalidationCapability);
+  return args;
 }
 
 export function sessionMetadataMatches(

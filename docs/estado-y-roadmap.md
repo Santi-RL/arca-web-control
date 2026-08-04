@@ -1,20 +1,20 @@
 # Estado y roadmap del proyecto
 
-Última actualización: 2026-08-01.
+Última actualización: 2026-08-03.
 
 ## Estado actual
 
 ARCA Web Control es un proyecto experimental y en desarrollo. Combina un núcleo Playwright local, una sesión conversacional, un modo de aprendizaje visible, manifiestos de capacidades, una skill para agentes y un MCP `stdio`.
 
-Las capacidades fiscales declaradas hasta el resumen son `invoice-services-single-item`, para un receptor identificado por CUIT, e `invoice-services-single-item-consumidor-final-anonimo`, para Consumidor Final sin identificar. Ambas se limitan a Factura C de Servicios, moneda local `ARS`, un ítem, Chrome visible y madurez `automated_to_summary`, con `hiddenAllowed: false`. La preparación exige verificar un único control visible `Moneda Extranjera` desmarcado. La segunda capacidad completó su revalidación irreversible visible, pero no fue promovida; los manifiestos no habilitan emisión productiva ni ejecución oculta.
+Las capacidades fiscales operativas son `invoice-services-single-item`, para un receptor identificado por CUIT, e `invoice-services-single-item-consumidor-final-anonimo`, para Consumidor Final sin identificar. Ambas se limitan a Factura C de Servicios, moneda local `ARS`, un ítem, Chrome visible y madurez `controlled_irreversible`, con `hiddenAllowed: false`. La preparación exige verificar un único control visible `Moneda Extranjera` desmarcado. Los manifiestos habilitan la emisión visible con confirmación humana exacta `EMITIR`; no habilitan ejecución oculta.
 
 La plataforma soportada es Windows 10/11. Windows Credential Manager sigue siendo el proveedor predeterminado, pero ya no es obligatorio: el usuario puede seleccionar un archivo JSON externo de solo lectura y administrar sus permisos. Todos los datos operativos privados viven fuera de Git, bajo `%LOCALAPPDATA%\ManejoARCA`.
 
 ## Base implementada
 
 - Jobs `schemaVersion: 2`, moneda y condición frente al IVA explícitas, importes decimales exactos, CUIT canónico estricto y `operationId` idempotente por intención. La ausencia del discriminante conserva el receptor identificado histórico; `recipientKind: "anonymous-final-consumer"` declara de forma inequívoca el Consumidor Final sin CUIT, nombre ni domicilio.
-- Intake conversacional de jobs mediante JSON por `stdin`, resolución unívoca del emisor, UUID de intención privado, identificadores opacos independientes de defaults o campos fiscales opcionales, reutilización segura, escritura exclusiva y ACL privada.
-- Orquestación conversacional única desde los datos completos hasta el resumen mediante `arca:invoice:prepare-chat`, con normalización de fechas e importes, reutilización de sesión y handles internos.
+- Intake conversacional de jobs mediante JSON por `stdin`, resolución unívoca del emisor, UUID de intención privado, identificadores opacos independientes de defaults o campos fiscales opcionales, reutilización segura, escritura exclusiva y ACL privada. Admite importes enteros argentinos y normaliza el alias conversacional `Responsable Inscripto` al rótulo exacto de ARCA.
+- Orquestación conversacional única desde los datos completos hasta el resumen mediante `arca:invoice:prepare-chat`, con normalización de fechas e importes, reutilización de sesión y handles internos. En una operación soportada, la confirmación posterior emite sobre esa misma preparación y sesión, sin reconstruir el formulario. Un cambio de emisor releva automáticamente una sesión anterior viva e inactiva, sin una autorización redundante; los estados ocupados o no verificables fallan cerrados.
 - Proveedores de credenciales configurables (`windows` y `json-file`) con CUIT canónico, índice no secreto para resolver nombres, rechazo de hard links, errores sanitizados y huella del archivo verificada antes y después de cargar la clave.
 - Preflight de nombres de emisor antes de jobs, logs, workers o Chrome, con resolución exacta y candidatos no secretos para variantes acotadas; ninguna sugerencia carga una clave ni inicia sesión sin confirmación humana.
 - Estado preparado inmutable con hash, huella de página y vencimiento de 60 minutos.
@@ -62,7 +62,7 @@ Una Factura C de Servicios fue emitida en Chrome visible después de mostrar el 
 
 La interfaz inició una descarga directa al pulsar `Imprimir...`. La estrategia anterior no capturó ese evento y dejó correctamente el ledger en `unknown`. El PDF oficial se recuperó, validó y reconcilió localmente como `emitted`, sin volver a emitir. Los identificadores, el PDF, su hash y el ledger permanecen exclusivamente en el almacenamiento privado.
 
-El código vigente escucha la descarga antes del único clic, la recibe en staging privado, valida el PDF, extrae número/CAE, calcula el hash y publica PDF más metadatos en el archivo canónico del emisor. Ese tramo nuevo todavía requiere una próxima validación visible completa; por eso `lastValidatedVisible` continúa en `false`, la madurez regresó a `automated_to_summary` y tanto la emisión como el modo oculto permanecen deshabilitados por el manifiesto.
+El código vigente escucha la descarga antes del único clic, la recibe en staging privado, valida el PDF, extrae número/CAE, calcula el hash y publica PDF más metadatos en el archivo canónico del emisor. En ese hito, el tramo nuevo todavía requería una validación visible completa; por eso `lastValidatedVisible` continuó en `false`, la madurez regresó a `automated_to_summary` y tanto la emisión como el modo oculto permanecieron deshabilitados por el manifiesto.
 
 Para resolver la circularidad sin falsear la madurez, existe un carril de revalidación visible explícito. Solo puede habilitarse al iniciar una sesión exclusiva para la capacidad pendiente, exige un `preparedInvoiceId` vigente y la confirmación exacta `EMITIR`, reutiliza el mismo flujo irreversible y mantiene `unknown` como resultado terminal ante incertidumbre. Antes del primer clic reserva una atestación privada ligada a la versión del manifiesto. Una falla comprobada antes de intentar el clic permite liberar esa reserva y volver a `failed_before_emit`, siempre cerrando la sesión consumida; desde el primer intento de clic, ningún job o sesión nuevos pueden consumir una segunda acción irreversible de esa versión. Este carril no habilita la emisión productiva ni modifica el manifiesto automáticamente.
 
@@ -70,7 +70,7 @@ Para resolver la circularidad sin falsear la madurez, existe un carril de revali
 
 Una revalidación visible produjo un único comprobante y descargó su PDF oficial, pero la validación automática dejó correctamente la operación en `unknown`: el total era visualmente correcto, aunque PDF.js entregaba el importe antes que la etiqueta `Importe Total` en el orden lógico de sus `TextItem`. No se repitió la acción irreversible y los artefactos crudos permanecieron en el almacenamiento privado.
 
-La validación reconstruye ahora cada línea por las coordenadas del texto, exige una única etiqueta y un único importe monetario posterior en esa línea visual, y rechaza cualquier geometría ambigua. Las pruebas locales cubren el orden lógico invertido, un total incorrecto en esa variante, etiquetas duplicadas y dos importes en una misma línea. La reconciliación canónica de esta operación y una revalidación visible integral de la versión corregida continúan pendientes; por eso no se promueven la madurez, la emisión productiva ni el modo oculto.
+La validación reconstruye ahora cada línea por las coordenadas del texto, exige una única etiqueta y un único importe monetario posterior en esa línea visual, y rechaza cualquier geometría ambigua. Las pruebas locales cubren el orden lógico invertido, un total incorrecto en esa variante, etiquetas duplicadas y dos importes en una misma línea. En ese momento, la reconciliación canónica y una revalidación visible integral de la versión corregida quedaron pendientes; por eso ese hito no promovió la madurez, la emisión productiva ni el modo oculto.
 
 ## Aprendizaje visible de Consumidor Final anónimo y alcance por punto de venta del 2026-07-31
 
@@ -80,7 +80,7 @@ Segundo, un Consumidor Final sin identificar no se deduce de campos ausentes. Se
 
 El recorrido también confirmó que `Email` y `Comprobantes Asociados` son optativos. La capacidad vigente no modela valores para esos campos: deben quedar sin completar, con evidencia visible de email vacío y de todos los campos de comprobantes asociados vacíos. En el resumen, ARCA representa `Email` sin valor y `Comprobantes Asociados` con `-`; cualquier valor solicitado por el usuario constituye una variante todavía no modelada ni aprendida y no debe completarse por inferencia.
 
-La variante se mantiene como una capacidad separada, `invoice-services-single-item-consumidor-final-anonimo`, con madurez `automated_to_summary`, ejecución visible, `hiddenAllowed: false` y sin comando productivo de emisión. Su posterior revalidación visible quedó registrada de manera independiente. El aprendizaje y una corrida exitosa no promueven automáticamente la capacidad.
+En ese hito, la variante se mantuvo como una capacidad separada, `invoice-services-single-item-consumidor-final-anonimo`, con madurez `automated_to_summary`, ejecución visible, `hiddenAllowed: false` y sin comando productivo de emisión. Su posterior revalidación visible quedó registrada de manera independiente. El aprendizaje y una corrida exitosa no promueven automáticamente la capacidad.
 
 ## Variante del PDF de Consumidor Final anónimo detectada el 2026-07-31
 
@@ -100,16 +100,32 @@ El PDF oficial contenía tres páginas o copias. Cada una se validó íntegramen
 
 El manifiesto registra esta validación visible, pero conserva madurez `automated_to_summary`, `hiddenAllowed: false` y solo `prepare-invoice`; no incorpora `emit-prepared-invoice`. Evaluar una promoción es un paso humano separado y no forma parte de este hito.
 
+## Revalidación visible completa de receptor identificado del 2026-08-03
+
+Se completó una corrida visible y supervisada de `invoice-services-single-item` desde la preparación hasta el archivo canónico. Después de mostrar el resumen estructurado, la acción irreversible se ejecutó exactamente una vez con una confirmación humana nueva e idéntica a `EMITIR`.
+
+ARCA informó la generación del comprobante, la automatización capturó una única descarga oficial, validó el PDF contra el job, extrajo de forma inequívoca el número de comprobante y el CAE y publicó PDF y metadatos sin sobrescribir. El ledger terminó en `emitted`. Los nombres, CUIT, importes, identificadores, hash, rutas y artefactos crudos permanecen exclusivamente en el runtime privado.
+
+## Reducción de fricción y promoción humana del 2026-08-03
+
+La revisión humana posterior consideró suficientes las revalidaciones visibles de ambas capacidades y autorizó su uso operativo visible. Los manifiestos pasaron a `controlled_irreversible`, incorporaron `emit-prepared-invoice` y conservaron `hiddenAllowed: false`. La promoción quedó modelada como una transición atómica: al alcanzar esa madurez, el comando de promoción incorpora también el comando productivo de emisión, evitando un estado nominalmente promovido pero todavía inutilizable.
+
+El carril operativo normal prepara una sola vez, conserva el `preparedInvoiceId` y, después de mostrar el resumen completo, ejecuta `emit-prepared-invoice` en la misma sesión ante un mensaje humano nuevo exactamente igual a `EMITIR`. El carril exclusivo de revalidación no es un paso operativo: es un puente de desarrollo de un solo uso para certificar una versión todavía pendiente. Si en el futuro una versión pendiente debiera validarse, la intención de emitir debe encaminarse a ese carril desde la primera preparación; nunca se prepara primero en un carril y se reconstruye luego en otro.
+
+La sesión también mostró fricciones de intake que no cambian el alcance fiscal. Los datos faltantes deben solicitarse juntos antes de abrir Chrome; los importes sin centavos explícitos se normalizan a dos decimales; `Responsable Inscripto` se normaliza al rótulo exacto `IVA Responsable Inscripto`; y un nombre abreviado del receptor no debe usarse como razón social esperada. El CUIT exacto identifica al receptor, ARCA aporta el nombre legal y el agente debe mostrar obligatoriamente ese nombre, el CUIT y el domicilio en el resumen que el usuario confirma con `EMITIR`. Si se proporcionó una razón social esperada incompatible, el error devuelve el nombre canónico visible y el CUIT para que el agente pueda pedir una confirmación concreta. Después de una emisión exitosa, una factura nueva del mismo emisor reutiliza la sesión visible y regresa desde `Comprobante Generado` mediante el control conocido `Menú Principal`, sin repetir el login.
+
+El cambio de emisor también forma parte del flujo rutinario de un estudio contable. Una solicitud nueva con un emisor resuelto de forma unívoca es autorización suficiente para descartar cualquier borrador anterior todavía no emitido, cerrar de forma controlada una sesión viva e inactiva y abrir la nueva. El agente no debe pedir permiso adicional. La transición conserva el bloqueo si la sesión está ejecutando un comando, quedó huérfana o no puede cerrarse de forma verificable.
+
 ## Evaluaciones aisladas de la skill
 
 Las evaluaciones se realizaron sin abrir ARCA, sin acceder al runtime privado y sin ejecutar acciones fiscales:
 
-- el escenario soportado clasificó correctamente Factura C, Servicios, ARS y un ítem, con preparación únicamente hasta el resumen;
+- el escenario soportado clasificó correctamente Factura C, Servicios, ARS y un ítem, con preparación y emisión visible separadas por la confirmación exacta;
 - una variante Factura A, Productos, moneda extranjera y dos ítems fue rechazada y derivada a aprendizaje visible privado;
-- una paráfrasis como «dale, confirmo» fue rechazada como autorización: una futura emisión solo podrá aceptar un nuevo mensaje humano exactamente igual a `EMITIR`;
+- una paráfrasis como «dale, confirmo» fue rechazada como autorización: la emisión solo acepta un nuevo mensaje humano exactamente igual a `EMITIR`;
 - la revisión de seguridad confirmó CUIT de once dígitos exactos, moneda explícita, aislamiento de pestañas, frame principal y URL estable en aprendizaje, y ausencia de inferencias fiscales en la migración.
 
-Estas evaluaciones comprueban interpretación y fail-closed; no sustituyen la evidencia visible registrada ni futuras corridas repetidas requeridas para una promoción.
+Estas evaluaciones comprueban interpretación y fail-closed; no sustituyen la evidencia visible registrada ni las corridas repetidas requeridas antes de evaluar `fast_path`.
 
 ## Controles locales de aceptación
 
@@ -141,11 +157,10 @@ El validador público no encontró incidencias en el árbol saneado y bloqueó �
 
 ## Próximos hitos
 
-1. Revisar, con aprobación humana separada, si la evidencia disponible justifica promover `invoice-services-single-item-consumidor-final-anonimo` a `controlled_irreversible`; no habilitar emisión productiva como parte del registro de este hito.
-2. Medir al menos cinco corridas humanas y cinco automatizadas para fijar presupuestos de login a resumen y confirmación a PDF.
-3. Evaluar `fast_path` solamente después de evidencia repetida y aprobación humana; `hiddenAllowed` no cambia de forma automática.
-4. Aprender y validar la consulta de comprobantes emitidos antes de exponer `arca_query_issued_invoices`.
-5. Incorporar otros tipos de comprobante, conceptos o múltiples ítems únicamente como capacidades separadas y supervisadas.
+1. Medir al menos cinco corridas humanas y cinco automatizadas para fijar presupuestos de login a resumen y confirmación a PDF.
+2. Evaluar `fast_path` solamente después de evidencia repetida y aprobación humana; `hiddenAllowed` no cambia de forma automática.
+3. Aprender y validar la consulta de comprobantes emitidos antes de exponer `arca_query_issued_invoices`.
+4. Incorporar otros tipos de comprobante, conceptos o múltiples ítems únicamente como capacidades separadas y supervisadas.
 
 ## Preparación para publicación pública
 

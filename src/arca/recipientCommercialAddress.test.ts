@@ -93,7 +93,7 @@ test("bloquea antes de validar el nombre si el CUIT visible del receptor difiere
   }
 });
 
-test("el error de razón social no expone el valor fiscal devuelto por ARCA", async () => {
+test("el error de razón social muestra el nombre canónico de ARCA para confirmación humana", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await openFixture(browser, `
@@ -108,8 +108,10 @@ test("el error de razón social no expone el valor fiscal devuelto por ARCA", as
     const error = await captureRecipientEvidence(page, invoiceJob("Avenida Ficticia 100"))
       .then(() => undefined, (cause: unknown) => cause);
     assert.ok(error instanceof Error);
-    assert.match(error.message, /razón social devuelta por ARCA no coincide/i);
-    assert.equal(error.message.includes(visibleName), false);
+    assert.match(error.message, /ARCA_RECIPIENT_NAME_CONFIRMATION_REQUIRED/);
+    assert.match(error.message, /20-00000000-1/);
+    assert.equal(error.message.includes(visibleName), true);
+    assert.match(error.message, /Confirmá ese nombre legal/i);
     await page.close();
   } finally {
     await browser.close();

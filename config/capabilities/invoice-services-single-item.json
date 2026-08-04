@@ -2,9 +2,9 @@
   "id": "invoice-services-single-item",
   "version": 14,
   "title": "Factura C de servicios de un ítem",
-  "maturity": "automated_to_summary",
+  "maturity": "controlled_irreversible",
   "hiddenAllowed": false,
-  "commands": ["status", "snapshot", "screenshot", "prepare-invoice"],
+  "commands": ["status", "snapshot", "screenshot", "prepare-invoice", "emit-prepared-invoice"],
   "irreversibleAction": "Emitir el comprobante en ARCA",
   "confirmation": "EMITIR",
   "recovery": "Detenerse y capturar evidencia. Ante 403 o sesión expirada, no reenviar el formulario: autenticar nuevamente y reconstruir el borrador. Ante estado unknown, consultar ARCA antes de cualquier reintento y reconciliar el PDF en el archivo canónico privado.",
@@ -17,7 +17,7 @@
     "itemCount": 1
   },
   "testEvidence": ["src/capabilities/registry.test.ts", "src/arca/preparedInvoice.test.ts", "src/arca/liveSession.test.ts", "src/arca/chatPreparation.test.ts", "src/arca/visibleRevalidationGuard.test.ts", "src/arca/sessionPrivatePaths.test.ts", "src/arca/invoiceFlow.integration.test.ts", "src/arca/recipientIdentity.test.ts", "src/arca/recipientCommercialAddress.test.ts", "src/arca/invoiceTotal.test.ts", "src/arca/invoicePdf.test.ts", "src/arca/invoiceArchive.test.ts", "src/arca/navigation.test.ts", "src/arca/operationLedger.test.ts", "src/arca/emission.test.ts", "src/arca/sessionLauncher.test.ts", "src/arca/sessionCommandGate.test.ts", "src/arca/authenticationAttemptGate.test.ts", "src/arca/captcha.test.ts", "src/arca/login.test.ts", "src/arca/performance.test.ts", "src/config/env.test.ts", "src/config/credentials.test.ts", "src/config/credentialProvider.test.ts", "src/config/runtimePaths.test.ts", "src/config/runtimeMaintenance.test.ts", "src/config/privateDownloads.test.ts", "src/config/privateJobs.test.ts", "src/config/privateRecoveryPdf.test.ts", "src/io/privateChildProcess.test.ts", "src/io/loopbackRequest.test.ts", "src/io/osMutex.test.ts", "src/io/atomicJson.test.ts", "src/jobs/schema.test.ts", "src/jobs/privateIntake.test.ts", "src/jobs/chatIntake.test.ts", "src/jobs/migrateScript.test.ts", "src/mcp/contracts.test.ts", "src/learning/authentication.test.ts", "src/learning/recorder.integration.test.ts"],
-  "realEvidence": ["docs/estado-y-roadmap.md#validación-visible-del-2026-07-29-hasta-el-resumen", "docs/estado-y-roadmap.md#variante-real-del-pdf-detectada-el-2026-07-31"],
-  "lastValidatedAt": null,
-  "lastValidatedVisible": false
+  "realEvidence": ["docs/estado-y-roadmap.md#validación-visible-del-2026-07-29-hasta-el-resumen", "docs/estado-y-roadmap.md#variante-real-del-pdf-detectada-el-2026-07-31", "docs/estado-y-roadmap.md#revalidación-visible-completa-de-receptor-identificado-del-2026-08-03"],
+  "lastValidatedAt": "2026-08-03",
+  "lastValidatedVisible": true
 }

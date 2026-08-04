@@ -13,7 +13,7 @@ Archivo generado desde el registro de comandos del proyecto. No editar manualmen
 - `npm run arca:issuer:resolve`: Resuelve rápidamente un emisor sobre el índice no secreto y propone candidatos sin cargar claves.
 - `npm run arca:invoice:prepare-chat`: Valida datos conversacionales, crea o reutiliza el job privado idempotente, inicia o reutiliza Chrome visible y devuelve el resumen.
 - `npm run arca:session:start`: Inicia una sesión y exige READY_STATE=portal; la revalidación irreversible requiere un modo visible explícito y exclusivo.
-- `npm run arca:session:cmd`: Ejecuta comandos tipados sobre la sesión actual; resume-authentication exige una intervención humana previa y revalidate-prepared-invoice exige preparedInvoiceId vigente y EMITIR.
+- `npm run arca:session:cmd`: Ejecuta comandos tipados sobre la sesión actual; emit-prepared-invoice exige preparedInvoiceId vigente y EMITIR, y revalidate-prepared-invoice queda reservado a validación controlada.
 - `npm run arca:session:stop`: Cierra la sesión de forma controlada.
 - `npm run arca:learn:start`: Inicia aprendizaje visible; ante captcha conserva Chrome y publica el estado pausado.
 - `npm run arca:learn:cmd`: Reanuda explícitamente una pausa de autenticación, inspecciona y controla de forma híbrida la sesión visible, agrega evidencia o finaliza el candidato.
@@ -27,4 +27,4 @@ Archivo generado desde el registro de comandos del proyecto. No editar manualmen
 - `npm run arca:issuer:profile`: Consulta o configura regímenes específicos por CUIT sin mezclar datos con la credencial.
 - `npm run arca:invoice:recover-pdf`: Recupera un PDF, valida número/CAE/hash, publica PDF y metadatos en el archivo canónico y reconcilia un ledger unknown.
 
-La emisión está deshabilitada por los manifiestos vigentes. `emit-prepared-invoice` no debe ejecutarse hasta una revalidación visible y promoción humana.
+La emisión habilitada se ejecuta con `npm run arca:session:cmd -- emit-prepared-invoice <preparedInvoiceId> EMITIR`.

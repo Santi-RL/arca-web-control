@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import type { CurrentSessionState } from "./sessionState.js";
-import { parseChatPreparationArgs, sanitizePreparationOutput, sessionMetadataMatches, sessionStatusIsReusable } from "./chatPreparation.js";
+import { buildChatVisibleSessionStartArgs, parseChatPreparationArgs, sanitizePreparationOutput, sessionMetadataMatches, sessionStatusIsReusable } from "./chatPreparation.js";
 
 const session = {
   issuerKey: "20000000001",
@@ -18,6 +18,33 @@ test("la ruta conversacional parsea solo flags cerrados", () => {
   });
   assert.throws(() => parseChatPreparationArgs(["--timeout-ms"]), /exige un valor/);
   assert.throws(() => parseChatPreparationArgs(["--otro"]), /no reconocido/);
+});
+
+test("la ruta conversacional autoriza el relevo controlado de una sesión anterior", () => {
+  assert.deepEqual(buildChatVisibleSessionStartArgs({
+    scriptPath: "arca-session-start.mts",
+    issuerCuit: "20000000001",
+    timeoutMs: 180000,
+  }), [
+    "--import",
+    "tsx",
+    "arca-session-start.mts",
+    "--issuer",
+    "20000000001",
+    "--timeout-ms",
+    "180000",
+    "--force-new",
+  ]);
+  assert.deepEqual(buildChatVisibleSessionStartArgs({
+    scriptPath: "arca-session-start.mts",
+    issuerCuit: "27000000006",
+    timeoutMs: 90000,
+    revalidationCapability: "invoice-services-single-item",
+  }).slice(-3), [
+    "--force-new",
+    "--revalidate-irreversible",
+    "invoice-services-single-item",
+  ]);
 });
 
 test("PowerShell reenvía el flag de revalidación cuando el separador de npm está citado", { skip: process.platform !== "win32" }, () => {

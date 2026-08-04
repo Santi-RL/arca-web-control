@@ -100,6 +100,27 @@ export function parseCapabilityManifest(value: unknown): CapabilityManifest {
   return capabilitySchema.parse(value);
 }
 
+export function buildPromotedCapabilityManifest(
+  manifest: CapabilityManifest,
+  maturity: CapabilityMaturity,
+  enableHidden = false,
+): CapabilityManifest {
+  if (maturityRank(maturity) < maturityRank(manifest.maturity)) {
+    throw new Error(`La promoción no puede reducir la madurez de ${manifest.id}.`);
+  }
+  if (enableHidden && maturity !== "fast_path") {
+    throw new Error("El modo oculto solo puede habilitarse junto con fast_path.");
+  }
+  const enablesEmission = maturityRank(maturity) >= maturityRank("controlled_irreversible");
+  if (enablesEmission && (!manifest.lastValidatedVisible || !manifest.lastValidatedAt)) {
+    throw new Error(`La promoción irreversible de ${manifest.id} exige una validación humana visible y fechada.`);
+  }
+  const commands = enablesEmission
+    ? [...new Set([...manifest.commands, "emit-prepared-invoice"])]
+    : manifest.commands;
+  return parseCapabilityManifest({ ...manifest, maturity, hiddenAllowed: enableHidden, commands });
+}
+
 export async function loadCapabilityRegistry(root = path.resolve("config", "capabilities")): Promise<CapabilityManifest[]> {
   const entries = (await fs.readdir(root, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.endsWith(".json"));
   const manifests = await Promise.all(entries.map(async (entry) => {

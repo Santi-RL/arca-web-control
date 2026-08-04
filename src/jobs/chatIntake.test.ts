@@ -29,6 +29,25 @@ test("normaliza fechas locales, importe argentino, CUIT y vencimiento predetermi
   assert.equal(Object.hasOwn(normalized, "recipientKind"), false);
 });
 
+test("normaliza importes enteros conversacionales y el alias Responsable Inscripto", () => {
+  const base = {
+    intentId: "00000000-0000-4000-8000-000000000004",
+    issuerSelector: "Emisor Ficticio",
+    recipientCuit: "20-00000000-1",
+    recipientVatCondition: "Responsable inscripto.",
+    pointOfSale: "00001",
+    date: "15/06/2030",
+    billingPeriodFrom: "01/06/2030",
+    billingPeriodTo: "30/06/2030",
+    saleCondition: "Transferencia bancaria",
+    description: "Servicio ficticio para prueba",
+  };
+  const grouped = normalizeConversationalInvoiceInput({ ...base, amount: "$1.600.000" });
+  assert.equal(grouped.amount, "1600000.00");
+  assert.equal(grouped.recipientVatCondition, "IVA Responsable Inscripto");
+  assert.equal(normalizeConversationalInvoiceInput({ ...base, amount: "1600000" }).amount, "1600000.00");
+});
+
 test("acepta Consumidor Final anónimo sin materializar identidad fiscal", () => {
   const normalized = normalizeConversationalInvoiceInput({
     intentId: "00000000-0000-4000-8000-000000000003",
@@ -88,8 +107,10 @@ test("rechaza fechas inexistentes e importes ambiguos antes de abrir Chrome", ()
     amount: "100,00",
   };
   assert.throws(() => normalizeConversationalInvoiceInput({ ...base, date: "31/02/2030" }), /no existe/);
-  assert.throws(() => normalizeConversationalInvoiceInput({ ...base, amount: "100" }), /dos decimales/);
+  assert.throws(() => normalizeConversationalInvoiceInput({ ...base, amount: "100,0" }), /dos decimales/);
+  assert.throws(() => normalizeConversationalInvoiceInput({ ...base, amount: "0" }), /positivo/);
   assert.throws(() => normalizeConversationalInvoiceInput({ ...base, amount: 100.129 }), /redondeo/);
+  assert.equal(normalizeConversationalInvoiceInput({ ...base, amount: "100" }).amount, "100.00");
   assert.equal(normalizeConversationalInvoiceInput({ ...base, amount: 100.12 }).amount, "100.12");
 });
 

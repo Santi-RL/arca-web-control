@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import { ResolvedInvoiceJob } from "../types.js";
-import { assertEmissionResultMatchesPdf, buildPreparedInvoiceSummary, classifyReadyState, invalidatesPreparation, missingExpectedSummarySignals, redactSessionStateForLog, validatePreparedSummary } from "./liveSession.js";
+import { assertEmissionResultMatchesPdf, buildPreparedInvoiceSummary, classifyReadyState, invalidatesPreparation, missingExpectedSummarySignals, redactSessionStateForLog, requiresRcelMenuReturn, validatePreparedSummary } from "./liveSession.js";
 
 type IdentifiedResolvedInvoiceJob = Exclude<ResolvedInvoiceJob, { recipientKind: "anonymous-final-consumer" }>;
 
@@ -648,4 +648,9 @@ test("classifyReadyState no confía en títulos o textos RCEL falsificados", () 
   assert.notEqual(classifyReadyState("https://fe.afip.gob.ar.ejemplo.invalid/rcel/jsp/menu_ppal.jsp", "RCEL - Comprobantes", "Generar Comprobantes"), "rcel_menu");
   assert.notEqual(classifyReadyState("https://ejemplo.invalid/?next=https://fe.afip.gob.ar/rcel/jsp/menu_ppal.jsp", "RCEL", "RCEL - RÉGIMEN DE COMPROBANTES EN LÍNEA"), "rcel_menu");
   assert.notEqual(classifyReadyState("https://fe.afip.gob.ar/rcel/jsp/ruta-no-aprendida.do", "RCEL", "Generar Comprobantes"), "rcel_menu");
+});
+
+test("una factura nueva vuelve al menú RCEL desde el comprobante generado", () => {
+  assert.equal(requiresRcelMenuReturn("Comprobante Generado\nImprimir...\nMenú Principal"), true);
+  assert.equal(requiresRcelMenuReturn("Generar Comprobantes"), false);
 });

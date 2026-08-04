@@ -117,7 +117,10 @@ export async function captureRecipientEvidence(page: Page, job: ResolvedInvoiceJ
     { cuit: recipientCuit, name: recipientName },
     { cuit: job.recipientCuit, name: job.recipientName },
   )) {
-    throw new Error("La razón social devuelta por ARCA no coincide de forma segura con el job.");
+    throw new Error(
+      `ARCA_RECIPIENT_NAME_CONFIRMATION_REQUIRED: ARCA identificó el CUIT ${formatRecipientCuit(recipientCuit)} como "${recipientName}". `
+      + "Confirmá ese nombre legal o corregí el CUIT antes de continuar.",
+    );
   }
   const address = (await readRecipientCommercialAddress(page)).value;
   if (job.recipientCommercialAddress && !commercialAddressesMatch(address, job.recipientCommercialAddress)) {
@@ -280,6 +283,11 @@ function canonicalRecipientCuit(value: string | undefined): string | undefined {
   if (/^[0-9]{11}$/u.test(trimmed)) return trimmed;
   if (/^[0-9]{2}-[0-9]{8}-[0-9]$/u.test(trimmed)) return trimmed.replace(/-/g, "");
   return undefined;
+}
+
+function formatRecipientCuit(value: string): string {
+  const cuit = canonicalRecipientCuit(value);
+  return cuit ? `${cuit.slice(0, 2)}-${cuit.slice(2, 10)}-${cuit.slice(10)}` : value;
 }
 
 function isSingleCharacterTypo(left: string, right: string): boolean {
